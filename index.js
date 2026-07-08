@@ -10,9 +10,17 @@ const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore'); 
 const serviceAccount = require('./firebase-credentials.json');
 
+/ =========================================================================
+// 0. DETECTORES DE ERRORES CRÍTICOS (Evita que el servidor muera en silencio)
+// =========================================================================
+process.on('uncaughtException', (err) => console.error('\n[NODE FATAL] Excepción no capturada:', err));
+process.on('unhandledRejection', (reason, promise) => console.error('\n[NODE FATAL] Promesa rechazada no manejada:', reason));
+
 initializeApp({
     credential: cert(serviceAccount)
 });
+
+
 
 const db = getFirestore();
 db.settings({ ignoreUndefinedProperties: true });
@@ -152,11 +160,11 @@ async function connectToWhatsApp() {
     };
         
 
-    whatsappSock = makeWASocket({
+  whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        browser: ['TrueWin Agency', 'Chrome', '10.0'], // 🚀 IDENTIFICACIÓN LEGÍTIMA
-        logger: pino({ level: 'error' }) // 🚀 ENCENDEMOS LA LUZ DE ERRORES
+        browser: ['TrueWin Agency', 'Chrome', '10.0'],
+        logger: pino({ level: 'debug' }) // 🚀 CAMBIADO A 'debug' PARA VER EL TRÁFICO CRUDO
     });
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
@@ -227,17 +235,32 @@ app.get('/status', (req, res) => {
 });
 
 app.post('/send-text', async (req, res) => {
+    console.log(`\n============= [NUEVO INTENTO DE ENVÍO] =============`);
     const { numero, mensaje } = req.body;
-    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
+    console.log(`[Paso 1] Destinatario crudo recibido:`, numero);
+
+    if (!whatsappSock) {
+        console.error("[Paso 2] ERROR: El motor de WhatsApp está apagado o es null.");
+        return res.status(500).json({ error: "WhatsApp no inicializado." });
+    }
+
     try {
-        const jid = `${numero}@s.whatsapp.net`;
-        await whatsappSock.sendMessage(jid, { text: mensaje });
+        // Limpiamos el número por si la web envía un '+' o espacios accidentalmente
+        const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
+        const jid = `${numeroLimpio}@s.whatsapp.net`;
+        console.log(`[Paso 3] JID Formateado listo para Meta: ${jid}`);
+        
+        console.log(`[Paso 4] Inyectando mensaje al motor de Baileys...`);
+        const envio = await whatsappSock.sendMessage(jid, { text: mensaje });
+        
+        console.log(`[Paso 5] ¡ÉXITO! Meta confirmó la recepción. Datos:`, JSON.stringify(envio));
         res.json({ success: true });
     } catch (error) {
-        // 🚀 AHORA VEREMOS EXACTAMENTE QUÉ LE MOLESTA A WHATSAPP
-        console.error(`[CRÍTICO] Fallo enviando mensaje a ${numero}:`, error); 
-        res.status(500).json({ error: error.message });
+        console.error(`\n[CRÍTICO] Fallo catastrófico al ejecutar whatsappSock.sendMessage:`);
+        console.error(error); // Imprime el rastro de la pila (stack trace)
+        res.status(500).json({ error: error.message || "Fallo interno" });
     }
+    console.log(`====================================================\n`);
 });
 
 app.post('/send-image', async (req, res) => {
