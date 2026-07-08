@@ -261,6 +261,8 @@ async function connectToWhatsApp() {
 
 io.on('connection', (socket) => {
     console.log('[Socket.IO] ¡Nueva pestaña del CRM sincronizada al túnel en tiempo real!');
+    
+    // 1. Mantenemos el reporte de estado automático al conectar la pestaña
     if (whatsappSock && whatsappSock.user) {
         socket.emit('estado-conexion', 'conectado');
     } else if (ultimoQR) {
@@ -269,6 +271,22 @@ io.on('connection', (socket) => {
     } else {
         socket.emit('estado-conexion', 'desconectado');
     }
+
+    // 🚀 NUEVO: Escucha el tecleo manual en tiempo real desde el CRM y lo inyecta a WhatsApp
+    socket.on('crm-presencia', async ({ numero, estado }) => {
+        if (!whatsappSock) return;
+        try {
+            // Evaluamos correctamente si el destino es un identificador @lid o un número normal
+            const esLid = numero.toString().includes('lid');
+            const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
+            const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
+            
+            // Enviamos el estado ('composing' o 'paused') directamente a los servidores de Meta
+            await whatsappSock.sendPresenceUpdate(estado, jid);
+        } catch (e) {
+            // Manejo silencioso para evitar spam en tu consola por micro-desconexiones del WebSocket
+        }
+    });
 });
 
 // =========================================================================
