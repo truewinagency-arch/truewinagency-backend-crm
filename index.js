@@ -10,11 +10,6 @@ const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore'); 
 const serviceAccount = require('./firebase-credentials.json');
 
-/ =========================================================================
-// 0. DETECTORES DE ERRORES CRÍTICOS (Evita que el servidor muera en silencio)
-// =========================================================================
-process.on('uncaughtException', (err) => console.error('\n[NODE FATAL] Excepción no capturada:', err));
-process.on('unhandledRejection', (reason, promise) => console.error('\n[NODE FATAL] Promesa rechazada no manejada:', reason));
 
 initializeApp({
     credential: cert(serviceAccount)
@@ -36,6 +31,13 @@ const io = new Server(httpServer, {
         methods: ["GET", "POST"]
     }
 });
+
+/ =========================================================================
+// 0. DETECTORES DE ERRORES CRÍTICOS (Evita que el servidor muera en silencio)
+// =========================================================================
+process.on('uncaughtException', (err) => console.error('\n[NODE FATAL] Excepción no capturada:', err));
+process.on('unhandledRejection', (reason, promise) => console.error('\n[NODE FATAL] Promesa rechazada no manejada:', reason));
+
 
 app.use(cors({
     origin: '*',
