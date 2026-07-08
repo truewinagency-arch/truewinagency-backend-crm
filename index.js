@@ -243,8 +243,18 @@ app.post('/send-audio', async (req, res) => {
     }
 });
 
-httpServer.listen(PORT, () => {
-    console.log(`[TrueWin-Web] Servidor de la Agencia corriendo en el puerto ${PORT}`);
-});
+async function iniciarEcosistema() {
+    try {
+        // 1. Forzamos al servidor a esperar que WhatsApp cargue su sesión de Firestore
+        await connectToWhatsApp();
+        
+        // 2. Solo cuando WhatsApp esté listo, abrimos las puertas de la API HTTP y Sockets
+        httpServer.listen(PORT, () => {
+            console.log(`[TrueWin-Web] 🚀 API y WebSockets listos y escuchando en el puerto ${PORT}`);
+        });
+    } catch (error) {
+        console.error("[Crítico] Fallo al iniciar el ecosistema de TrueWin:", error);
+    }
+}
 
-connectToWhatsApp();
+iniciarEcosistema();
