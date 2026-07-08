@@ -179,8 +179,9 @@ async function connectToWhatsApp() {
     whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        browser: ['TrueWin Agency', 'Chrome', '10.0'],
-        logger: pino({ level: 'debug' }) // Modo diagnóstico activado para ver el tráfico crudo
+        // 🚀 CAMUFLAJE 1: Nos hacemos pasar por una PC normal usando Chrome o Edge
+        browser: ['Windows', 'Chrome', '111.0.0.0'], 
+        logger: pino({ level: 'error' })
     });
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
@@ -268,17 +269,28 @@ app.get('/status', (req, res) => {
 
 
 
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
-        // 🚀 MAGIA: Detectamos de qué red proviene el usuario
         const esLid = numero.toString().includes('lid');
         const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
         const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
         
+        // 🚀 CAMUFLAJE 1: Mostramos "Escribiendo..." en el teléfono del cliente
+        await whatsappSock.sendPresenceUpdate('composing', jid);
+        
+        // Generamos un tiempo de espera aleatorio entre 2.5 y 4.5 segundos simulando el tipeo humano
+        await delay(Math.floor(Math.random() * 2000) + 2500); 
+        
+        // Despachamos el mensaje y pausamos el estado de presencia
         await whatsappSock.sendMessage(jid, { text: mensaje });
-        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); // 🚀 GUARDAMOS NUESTRA RESPUESTA
+        await whatsappSock.sendPresenceUpdate('paused', jid);
+
+        // Guardamos de forma segura en tu base de datos mensajes_crm
+        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); 
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando texto a ${numero}:`, error);
@@ -294,8 +306,15 @@ app.post('/send-image', async (req, res) => {
         const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
         const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
         
+        // 🚀 CAMUFLAJE 2: Simulamos que estamos adjuntando un archivo imitando el retraso de subida
+        await whatsappSock.sendPresenceUpdate('composing', jid);
+        await delay(Math.floor(Math.random() * 1500) + 2000); 
+        
         await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: caption });
-        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); // 🚀 GUARDAMOS NUESTRA RESPUESTA
+        await whatsappSock.sendPresenceUpdate('paused', jid);
+
+        // Corregido: Guardamos la etiqueta del archivo multimedia enviado
+        await guardarMensajeBD(numero, "TrueWin", caption || "[Imagen enviada]", 'out'); 
 
         res.json({ success: true });
     } catch (error) {
@@ -312,15 +331,23 @@ app.post('/send-audio', async (req, res) => {
         const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
         const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
         
+        // 🚀 CAMUFLAJE 3: Mostramos de forma legítima "Grabando audio..." antes de soltar el PTT
+        await whatsappSock.sendPresenceUpdate('recording', jid);
+        
+        // Hacemos que simule estar grabando durante 4 segundos enteros
+        await delay(4000); 
+        
         await whatsappSock.sendMessage(jid, { audio: { url: urlAudio }, mimetype: 'audio/mp4', ptt: true });
-        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); // 🚀 GUARDAMOS NUESTRA RESPUESTA
+        await whatsappSock.sendPresenceUpdate('paused', jid);
+
+        // Corregido: Guardamos el registro en Firebase
+        await guardarMensajeBD(numero, "TrueWin", "[Nota de voz enviada]", 'out'); 
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando audio a ${numero}:`, error);
         res.status(500).json({ error: error.message });
     }
 });
-
 app.get('/api/historial', async (req, res) => {
     try {
         const snapshot = await coleccionMensajes.orderBy('timestamp', 'asc').get();
