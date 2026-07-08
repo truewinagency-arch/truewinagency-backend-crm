@@ -23,9 +23,27 @@ initializeApp({
 });
 
 const db = getFirestore();
-db.settings({ ignoreUndefinedProperties: true }); // Permite procesar variables vacías de Baileys
+db.settings({ ignoreUndefinedProperties: true });
 const coleccionSesion = db.collection('whatsapp_session');
 
+// 🚀 NUEVA COLECCIÓN: Cerebro de mensajes
+const coleccionMensajes = db.collection('mensajes_crm');
+
+// 🚀 FUNCIÓN MAESTRA: Guarda cada disparo en la base de datos
+async function guardarMensajeBD(numero, nombre, texto, tipo) {
+    try {
+        await coleccionMensajes.add({
+            numero: numero,
+            nombre: nombre || "Desconocido",
+            texto: texto,
+            tipo: tipo, // 'in' (recibido) o 'out' (enviado)
+            hora: new Date().toISOString(),
+            timestamp: Date.now() // Sirve para ordenarlos cronológicamente luego
+        });
+    } catch (error) {
+        console.error("Error guardando en historial:", error);
+    }
+}
 // =========================================================================
 // 2. CONFIGURACIÓN DEL SERVIDOR HTTP Y WEBSOCKETS
 // =========================================================================
@@ -168,9 +186,24 @@ async function connectToWhatsApp() {
     whatsappSock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') return;
-        const numero = msg.key.remoteJid.replace('@s.whatsapp.net', '');
+        
+        const remoteJid = msg.key.remoteJid;
+        const nombrePerfil = msg.pushName || "Usuario"; // 🚀 CAPTURAMOS EL NOMBRE DE WHATSAPP
+        
+        const numeroLimpio = remoteJid.replace('@s.whatsapp.net', '').replace('@lid', '');
+        const identificador = remoteJid.includes('@lid') ? `${numeroLimpio}@lid` : numeroLimpio;
+
         const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "[Multimedia/Sticker recibido]";
-        io.emit('nuevo-mensaje', { numero, texto, hora: new Date().toISOString() });
+        
+        // 🚀 GUARDAMOS EN FIREBASE AL INSTANTE
+        await guardarMensajeBD(identificador, nombrePerfil, texto, 'in');
+
+        io.emit('nuevo-mensaje', { 
+            numero: identificador, 
+            nombre: nombrePerfil, 
+            texto: texto, 
+            hora: new Date().toISOString() 
+        });
     });
 
     whatsappSock.ev.on('connection.update', async (update) => {
@@ -232,6 +265,9 @@ app.get('/status', (req, res) => {
     res.json({ status: "disconnected", qr: ultimoQR });
 });
 
+
+
+
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
@@ -242,6 +278,7 @@ app.post('/send-text', async (req, res) => {
         const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
         
         await whatsappSock.sendMessage(jid, { text: mensaje });
+        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); // 🚀 GUARDAMOS NUESTRA RESPUESTA
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando texto a ${numero}:`, error);
@@ -258,6 +295,8 @@ app.post('/send-image', async (req, res) => {
         const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
         
         await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: caption });
+        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); // 🚀 GUARDAMOS NUESTRA RESPUESTA
+
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando imagen a ${numero}:`, error);
@@ -274,10 +313,34 @@ app.post('/send-audio', async (req, res) => {
         const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
         
         await whatsappSock.sendMessage(jid, { audio: { url: urlAudio }, mimetype: 'audio/mp4', ptt: true });
+        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); // 🚀 GUARDAMOS NUESTRA RESPUESTA
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando audio a ${numero}:`, error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/historial', async (req, res) => {
+    try {
+        const snapshot = await coleccionMensajes.orderBy('timestamp', 'asc').get();
+        const historial = {};
+        const nombres = {};
+        
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            if (!historial[data.numero]) historial[data.numero] = [];
+            
+            historial[data.numero].push({ tipo: data.tipo, texto: data.texto, hora: data.hora });
+
+            // Guardamos el nombre real de la persona para usarlo en el diseño
+            if (data.tipo === 'in' && data.nombre) nombres[data.numero] = data.nombre;
+        });
+        
+        res.json({ historial, nombres });
+    } catch (error) {
+        console.error("Error obteniendo historial:", error);
+        res.status(500).json({ error: "Fallo al obtener historial" });
     }
 });
 
