@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const pino = require('pino');
 // 1. IMPORTAMOS initAuthCreds PARA QUE SEPA QUÉ HACER CUANDO LA BASE ESTÉ VACÍA
-const { default: makeWASocket, DisconnectReason, initAuthCreds } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 
@@ -60,8 +60,11 @@ async function connectToWhatsApp() {
             
             snapshot.forEach(doc => {
                 tieneDatos = true;
-                if (doc.id === 'creds') creds = doc.data();
-                else keys[doc.id] = doc.data();
+                // Desempaquetamos el string seguro y lo volvemos a convertir en objetos de Baileys
+                const parsedData = JSON.parse(doc.data().payload, BufferJSON.reviver);
+                
+                if (doc.id === 'creds') creds = parsedData;
+                else keys[doc.id] = parsedData;
             });
             return { creds, keys, tieneDatos };
         } catch (e) { 
@@ -71,7 +74,11 @@ async function connectToWhatsApp() {
 
     const writeState = async (data, id) => {
         try {
-            await coleccionSesion.doc(id).set(data);
+            // Empaquetamos los objetos complejos de Baileys en un string plano seguro para Firestore
+            const stringifiedData = JSON.stringify(data, BufferJSON.replacer);
+            
+            // Lo guardamos dentro de una propiedad llamada 'payload'
+            await coleccionSesion.doc(id).set({ payload: stringifiedData });
         } catch (e) { 
             console.error("Error al escribir datos de sesión en la nube:", e); 
         }
