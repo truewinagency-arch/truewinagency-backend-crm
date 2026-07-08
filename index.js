@@ -123,11 +123,15 @@ async function connectToWhatsApp() {
                             const value = data[type][id];
                             const docId = `${type}-${id}`;
                             
-                            // Guardamos en la memoria RAM al instante
-                            cacheKeys[docId] = value;
-
                             if (value) {
-                                promesasDeGuardado.push(writeState(value, docId));
+                                // 1. Guardar/Actualizar llave activa
+                                cacheKeys[docId] = value;
+                                const stringifiedData = JSON.stringify(value, BufferJSON.replacer);
+                                promesasDeGuardado.push(coleccionSesion.doc(docId).set({ payload: stringifiedData }));
+                            } else {
+                                // 2. ELIMINAR llave obsoleta (Crítico para evitar el Código 500)
+                                delete cacheKeys[docId];
+                                promesasDeGuardado.push(coleccionSesion.doc(docId).delete().catch(() => {}));
                             }
                         }
                     }
