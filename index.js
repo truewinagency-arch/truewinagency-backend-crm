@@ -7,6 +7,8 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
+
+let ultimoQR = null;
 // 1. CONFIGURACIÓN COMPLETA Y FORZADA DE CORS
 app.use(cors({
     origin: '*',
@@ -48,11 +50,9 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log("\n==================================================");
-            console.log("[TrueWin] ESCANEA EL SIGUIENTE CÓDIGO QR CON TU TELÉFONO:");
-            console.log("==================================================\n");
-            qrcode.generate(qr, { small: true });
-        }
+    ultimoQR = qr; // <--- Guarda el string del QR aquí
+    // Tu código actual de qrcode.generate...
+}
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut);
@@ -80,7 +80,8 @@ app.get('/status', (req, res) => {
     if (whatsappSock && whatsappSock.user) {
         return res.json({ status: "connected", user: whatsappSock.user });
     }
-    res.json({ status: "disconnected" });
+    // Si no está conectado, le escupe el string del QR a la web
+    res.json({ status: "disconnected", qr: ultimoQR });
 });
 
 // =========================================================================
