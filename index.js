@@ -167,6 +167,7 @@ async function connectToWhatsApp() {
         io.emit('nuevo-mensaje', { numero, texto, hora: new Date().toISOString() });
     });
 
+    // Control de actualización de conexión optimizado para limpiar y reconectar el 515
     whatsappSock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -178,16 +179,22 @@ async function connectToWhatsApp() {
 
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            
-            // Permitimos reconectar siempre, a menos que el usuario haya cerrado sesión a propósito
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
             console.log(`[TrueWin] Conexión cerrada (Código: ${statusCode}). ¿Reconectando?: ${shouldReconnect}`);
             io.emit('estado-conexion', 'desconectado');
 
+            // Limpiamos los listeners anteriores del socket viejo para evitar fugas de memoria o colisiones
+            if (whatsappSock) {
+                try { whatsappSock.ev.removeAllListeners(); } catch (e) {}
+                whatsappSock = null;
+            }
+
             if (shouldReconnect) {
-                setTimeout(() => { connectToWhatsApp(); }, 5000);
+                console.log('[TrueWin] Reiniciando flujo de socket de forma limpia en 3 segundos...');
+                setTimeout(() => { connectToWhatsApp(); }, 3000);
             } else {
-                console.log('[TrueWin] Sesión desvinculada desde el teléfono.');
+                console.log('[TrueWin] Sesión desvinculada voluntariamente.');
                 ultimoQR = null;
             }
         } else if (connection === 'open') {
