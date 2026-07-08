@@ -91,20 +91,28 @@ async function connectToWhatsApp() {
             keys: {
                 get: async (type, ids) => {
                     const data = {};
-                    const dbState = await readState();
+                    const dbState = await readState(); // Lee todo el bloque de una vez
                     for (const id of ids) {
                         data[id] = dbState.keys[`${type}-${id}`];
                     }
                     return data;
                 },
                 set: async (data) => {
+                    // CUELLO DE BOTELLA RESUELTO: Agrupamos las tareas
+                    const promesasDeGuardado = []; 
+                    
                     for (const type in data) {
                         for (const id in data[type]) {
                             const value = data[type][id];
                             const docId = `${type}-${id}`;
-                            if (value) await writeState(value, docId);
+                            if (value) {
+                                // Quitamos el 'await' individual. Preparamos el misil, no lo disparamos aún.
+                                promesasDeGuardado.push(writeState(value, docId));
+                            }
                         }
                     }
+                    // Disparamos las 500 peticiones a Firestore al mismo tiempo sin bloquear el servidor
+                    Promise.all(promesasDeGuardado).catch(err => console.error("Fallo guardando llaves en lote:", err));
                 }
             }
         },
@@ -112,6 +120,7 @@ async function connectToWhatsApp() {
             await writeState(state.creds, 'creds');
         }
     };
+        
 
     whatsappSock = makeWASocket({
         auth: state,
