@@ -51,22 +51,31 @@ let ultimoQR = null;
 async function connectToWhatsApp() {
     console.log("[TrueWin-Backend] Conectando con Firebase Firestore para verificar sesión remota...");
 
+    let cacheCreds = {};
+    let cacheKeys = {};
+    let cacheCargada = false;
+
     const readState = async () => {
+        // Si ya descargamos las llaves una vez, las leemos de la RAM al instante
+        if (cacheCargada) {
+            return { creds: cacheCreds, keys: cacheKeys, tieneDatos: true };
+        }
+
         try {
+            console.log("[TrueWin-Optimizado] Descargando llaves desde Firestore por primera vez...");
             const snapshot = await coleccionSesion.get();
-            let creds = {};
-            let keys = {};
             let tieneDatos = false; 
             
             snapshot.forEach(doc => {
                 tieneDatos = true;
-                // Desempaquetamos el string seguro y lo volvemos a convertir en objetos de Baileys
                 const parsedData = JSON.parse(doc.data().payload, BufferJSON.reviver);
                 
-                if (doc.id === 'creds') creds = parsedData;
-                else keys[doc.id] = parsedData;
+                if (doc.id === 'creds') cacheCreds = parsedData;
+                else cacheKeys[doc.id] = parsedData;
             });
-            return { creds, keys, tieneDatos };
+
+            if (tieneDatos) cacheCargada = true; // Marcamos que la RAM ya tiene la copia activa
+            return { creds: cacheCreds, keys: cacheKeys, tieneDatos };
         } catch (e) { 
             return { creds: {}, keys: {}, tieneDatos: false }; 
         }
@@ -74,10 +83,11 @@ async function connectToWhatsApp() {
 
     const writeState = async (data, id) => {
         try {
-            // Empaquetamos los objetos complejos de Baileys en un string plano seguro para Firestore
+            // Actualizamos la caché de la RAM inmediatamente para que esté disponible sin retrasos
+            if (id === 'creds') cacheCreds = data;
+            else cacheKeys[id] = data;
+
             const stringifiedData = JSON.stringify(data, BufferJSON.replacer);
-            
-            // Lo guardamos dentro de una propiedad llamada 'payload'
             await coleccionSesion.doc(id).set({ payload: stringifiedData });
         } catch (e) { 
             console.error("Error al escribir datos de sesión en la nube:", e); 
@@ -86,40 +96,41 @@ async function connectToWhatsApp() {
 
     const sesionFirebase = await readState();
 
-    // 2. LA MAGIA: Si no hay datos, creamos credenciales oficiales en blanco para forzar el QR
     let credencialesActivas = sesionFirebase.creds;
     if (!sesionFirebase.tieneDatos || Object.keys(credencialesActivas).length === 0) {
         console.log('[TrueWin] Base de datos limpia. Generando credenciales oficiales para pedir QR...');
         credencialesActivas = initAuthCreds();
+        cacheCreds = credencialesActivas;
     }
 
     const { state, saveCreds } = {
         state: {
-            creds: credencialesActivas,
+            creds: cacheCreds,
             keys: {
                 get: async (type, ids) => {
                     const data = {};
-                    const dbState = await readState(); // Lee todo el bloque de una vez
+                    // 🚀 MEJORA DE VELOCIDAD CRÍTICA: Leemos directo de la RAM local sin ir a Firebase
                     for (const id of ids) {
-                        data[id] = dbState.keys[`${type}-${id}`];
+                        const docId = `${type}-${id}`;
+                        data[id] = cacheKeys[docId];
                     }
                     return data;
                 },
                 set: async (data) => {
-                    // CUELLO DE BOTELLA RESUELTO: Agrupamos las tareas
                     const promesasDeGuardado = []; 
-                    
                     for (const type in data) {
                         for (const id in data[type]) {
                             const value = data[type][id];
                             const docId = `${type}-${id}`;
+                            
+                            // Guardamos en la memoria RAM al instante
+                            cacheKeys[docId] = value;
+
                             if (value) {
-                                // Quitamos el 'await' individual. Preparamos el misil, no lo disparamos aún.
                                 promesasDeGuardado.push(writeState(value, docId));
                             }
                         }
                     }
-                    // Disparamos las 500 peticiones a Firestore al mismo tiempo sin bloquear el servidor
                     Promise.all(promesasDeGuardado).catch(err => console.error("Fallo guardando llaves en lote:", err));
                 }
             }
