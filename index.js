@@ -117,25 +117,32 @@ async function connectToWhatsApp() {
                     return data;
                 },
                 set: async (data) => {
-                    const promesasDeGuardado = []; 
+                    // 🚀 MAGIA: Usamos un Batch para guardar todo al instante y en perfecto orden
+                    const batch = db.batch(); 
+                    let contador = 0;
+
                     for (const type in data) {
                         for (const id in data[type]) {
                             const value = data[type][id];
                             const docId = `${type}-${id}`;
+                            const docRef = coleccionSesion.doc(docId);
                             
                             if (value) {
-                                // 1. Guardar/Actualizar llave activa
                                 cacheKeys[docId] = value;
                                 const stringifiedData = JSON.stringify(value, BufferJSON.replacer);
-                                promesasDeGuardado.push(coleccionSesion.doc(docId).set({ payload: stringifiedData }));
+                                batch.set(docRef, { payload: stringifiedData });
                             } else {
-                                // 2. ELIMINAR llave obsoleta (Crítico para evitar el Código 500)
                                 delete cacheKeys[docId];
-                                promesasDeGuardado.push(coleccionSesion.doc(docId).delete().catch(() => {}));
+                                batch.delete(docRef);
                             }
+                            contador++;
                         }
                     }
-                    Promise.all(promesasDeGuardado).catch(err => console.error("Fallo guardando llaves en lote:", err));
+                    
+                    // Disparamos el lote completo a Firebase
+                    if (contador > 0) {
+                        await batch.commit().catch(e => console.error("Error en Lote de Firebase:", e));
+                    }
                 }
             }
         },
@@ -148,7 +155,8 @@ async function connectToWhatsApp() {
     whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        logger: pino({ level: 'silent' })
+        browser: ['TrueWin Agency', 'Chrome', '10.0'], // 🚀 IDENTIFICACIÓN LEGÍTIMA
+        logger: pino({ level: 'error' }) // 🚀 ENCENDEMOS LA LUZ DE ERRORES
     });
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
@@ -219,6 +227,8 @@ app.post('/send-text', async (req, res) => {
         await whatsappSock.sendMessage(jid, { text: mensaje });
         res.json({ success: true });
     } catch (error) {
+        // 🚀 AHORA VEREMOS EXACTAMENTE QUÉ LE MOLESTA A WHATSAPP
+        console.error(`[CRÍTICO] Fallo enviando mensaje a ${numero}:`, error); 
         res.status(500).json({ error: error.message });
     }
 });
