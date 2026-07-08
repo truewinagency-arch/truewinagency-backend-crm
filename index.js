@@ -1,40 +1,41 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode-terminal');
-const pino = require('pino');
 const express = require('express');
 const cors = require('cors');
-const app = express();
+const pino = require('pino');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 
+// 1. NUEVAS IMPORTACIONES PARA WEBSOCKETS
+const { createServer } = require('http');
+const { Server } = require('socket.io');
+
+const app = express();
 const PORT = process.env.PORT || 3000;
 
+// 2. CONFIGURAMOS EL SERVIDOR HTTP PARA QUE SOPORTE EXPRESS Y SOCKETS A LA VEZ
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+    cors: {
+        origin: "*", // Permite a tu web en Firebase conectarse en tiempo real
+        methods: ["GET", "POST"]
+    }
+});
 
-let ultimoQR = null;
-// 1. CONFIGURACIÓN COMPLETA Y FORZADA DE CORS
+// Middleware de CORS manual (tu remedio anti-bloqueos)
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Bypass-Tunnel-Reminder', 'bypass-tunnel-reminder']
 }));
-
-// 2. MIDDLEWARE MANUAL DE CONTROL DE PREFLIGHT (EL REMEDIO DEFINITIVO)
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Bypass-Tunnel-Reminder, bypass-tunnel-reminder');
-    
-    // Si la petición es de tipo OPTIONS (Preflight), respondemos con éxito inmediato status 200
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
+    if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
 });
-
-// 3. MIDDLEWARE PARA ENTIENDER JSON (Debe ir abajo de los controles de arriba)
 app.use(express.json());
 
-
-// Variable global para almacenar la instancia del socket
 let whatsappSock = null;
+let ultimoQR = null;
 
 async function connectToWhatsApp() {
     console.log("[TrueWin-Backend] Inicializando módulo de autenticación...");
@@ -46,30 +47,65 @@ async function connectToWhatsApp() {
         logger: pino({ level: 'silent' })
     });
 
+    // =========================================================================
+    // 3. LA MAGIA EN TIEMPO REAL: ESCUCHA DE MENSAJES ENTRANTES
+    // =========================================================================
+    whatsappSock.ev.on('messages.upsert', async (m) => {
+        const msg = m.messages[0];
+        
+        // Ignoramos los mensajes que enviamos nosotros mismos o estados/historias
+        if (!msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') return;
+
+        const numero = msg.key.remoteJid.replace('@s.whatsapp.net', '');
+        
+        // Extraemos el texto del mensaje (soporta texto plano o respuestas a otros mensajes)
+        const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "[Multimedia/Sticker recibido]";
+        
+        const mensajeEntrante = {
+            numero: numero,
+            texto: texto,
+            hora: new Date().toISOString()
+        };
+
+        console.log(`[TrueWin-Chat] Nuevo mensaje de ${numero}: ${texto}`);
+
+        // Emitimos el mensaje por el túnel a la interfaz web (Firebase)
+        io.emit('nuevo-mensaje', mensajeEntrante);
+    });
+
     whatsappSock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-    ultimoQR = qr; // <--- Guarda el string del QR aquí
-    // Tu código actual de qrcode.generate...
-}
+            ultimoQR = qr;
+            io.emit('qr-update', qr); // Transmitimos el QR en vivo por si la web está abierta
+        }
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut);
-            console.log('[TrueWin] Conexión redirigida o caída. ¿Reconectando?:', shouldReconnect);
-            if (shouldReconnect) {
-                connectToWhatsApp();
-            }
+            console.log('[TrueWin] Conexión caída. ¿Reconectando?:', shouldReconnect);
+            io.emit('estado-conexion', 'desconectado');
+            if (shouldReconnect) connectToWhatsApp();
         } else if (connection === 'open') {
-            console.log('\n==================================================');
             console.log('[TrueWin] ¡CONEXIÓN EXITOSA EN SEGUNDO PLANO!');
-            console.log('El backend está vinculado y listo para recibir órdenes.');
-            console.log('==================================================\n');
+            ultimoQR = null;
+            io.emit('estado-conexion', 'conectado');
         }
     });
 
     whatsappSock.ev.on('creds.update', saveCreds);
 }
+
+io.on('connection', (socket) => {
+    console.log('[Socket.IO] Panel de TrueWin Agency conectado al túnel en vivo.');
+    
+    // Si hay un estado pendiente, se lo enviamos a la pestaña que se acaba de abrir
+    if (ultimoQR) {
+        socket.emit('qr-update', ultimoQR);
+    } else if (whatsappSock && whatsappSock.user) {
+        socket.emit('estado-conexion', 'conectado');
+    }
+});
 
 // =========================================================================
 // ENDPOINTS DE LA API (Rutas de control para la agencia)
@@ -141,8 +177,8 @@ app.post('/send-audio', async (req, res) => {
 });
 
 // Levantar el servidor HTTP Express
-app.listen(PORT, () => {
-    console.log(`[TrueWin-Web] Servidor API corriendo en el puerto ${PORT}`);
+httpServer.listen(PORT, () => {
+    console.log(`[TrueWin-Web] Servidor API + WebSockets corriendo en el puerto ${PORT}`);
 });
 
 // Iniciar la conexión de WhatsApp
