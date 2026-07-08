@@ -1,31 +1,24 @@
 const express = require('express');
 const cors = require('cors');
 const pino = require('pino');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+// 1. IMPORTAMOS initAuthCreds PARA QUE SEPA QUÉ HACER CUANDO LA BASE ESTÉ VACÍA
+const { default: makeWASocket, DisconnectReason, initAuthCreds } = require('@whiskeysockets/baileys');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 
-// =========================================================================
-// 1. IMPORTACIÓN MODULAR COMPLETA (CORREGIDA Y SEGURA)
-// =========================================================================
 const { initializeApp, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore'); // Importamos Firestore por separado
+const { getFirestore } = require('firebase-admin/firestore'); 
 const serviceAccount = require('./firebase-credentials.json');
 
-// Inicializar la App de Firebase de forma moderna
 initializeApp({
     credential: cert(serviceAccount)
 });
 
-// Inicializar la base de datos usando getFirestore()
 const db = getFirestore();
 const coleccionSesion = db.collection('whatsapp_session');
 
-// =========================================================================
-// 2. CONFIGURACIÓN DEL SERVIDOR Y WEBSOCKETS
-// =========================================================================
 const app = express();
-const PORT = process.env.PORT || 3000; // Ajustado a 3001 para evitar bloqueos locales
+const PORT = process.env.PORT || 3000; 
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -35,7 +28,6 @@ const io = new Server(httpServer, {
     }
 });
 
-// Middleware de CORS manual anti-bloqueos
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -55,9 +47,6 @@ app.use(express.json());
 let whatsappSock = null;
 let ultimoQR = null;
 
-// =========================================================================
-// 3. CONEXIÓN A WHATSAPP CON PERSISTENCIA EN FIRESTORE (GRATUITO)
-// =========================================================================
 async function connectToWhatsApp() {
     console.log("[TrueWin-Backend] Conectando con Firebase Firestore para verificar sesión remota...");
 
@@ -66,7 +55,7 @@ async function connectToWhatsApp() {
             const snapshot = await coleccionSesion.get();
             let creds = {};
             let keys = {};
-            let tieneDatos = false; // Bandera para saber si Firestore tiene información
+            let tieneDatos = false; 
             
             snapshot.forEach(doc => {
                 tieneDatos = true;
@@ -87,12 +76,18 @@ async function connectToWhatsApp() {
         }
     };
 
-    // Leemos el estado inicial de Firebase
     const sesionFirebase = await readState();
+
+    // 2. LA MAGIA: Si no hay datos, creamos credenciales oficiales en blanco para forzar el QR
+    let credencialesActivas = sesionFirebase.creds;
+    if (!sesionFirebase.tieneDatos || Object.keys(credencialesActivas).length === 0) {
+        console.log('[TrueWin] Base de datos limpia. Generando credenciales oficiales para pedir QR...');
+        credencialesActivas = initAuthCreds();
+    }
 
     const { state, saveCreds } = {
         state: {
-            creds: sesionFirebase.creds || {},
+            creds: credencialesActivas,
             keys: {
                 get: async (type, ids) => {
                     const data = {};
@@ -124,20 +119,14 @@ async function connectToWhatsApp() {
         logger: pino({ level: 'silent' })
     });
 
-    // Escucha en tiempo real de mensajes entrantes
     whatsappSock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') return;
-
         const numero = msg.key.remoteJid.replace('@s.whatsapp.net', '');
         const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "[Multimedia/Sticker recibido]";
-        
-        const mensajeEntrante = { numero, texto, hora: new Date().toISOString() };
-        console.log(`[TrueWin-Chat] Mensaje de +${numero}: ${texto}`);
-        io.emit('nuevo-mensaje', mensajeEntrante);
+        io.emit('nuevo-mensaje', { numero, texto, hora: new Date().toISOString() });
     });
 
-    // CONTROL DE CONEXIÓN CORREGIDO ANTI-BUCLE (Arranque en frío)
     whatsappSock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -150,20 +139,16 @@ async function connectToWhatsApp() {
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             
-            // SI FIRESTORE NO TIENE DATOS o el código es deslogueado voluntario, FRENAMOS LA RECONEXIÓN
-            const esArranqueEnFrio = !sesionFirebase.tieneDatos;
-            const esSesionInvalida = statusCode === 401 || statusCode === DisconnectReason.loggedOut;
-            
-            const shouldReconnect = !esArranqueEnFrio && !esSesionInvalida;
-
+            // Permitimos reconectar siempre, a menos que el usuario haya cerrado sesión a propósito
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             console.log(`[TrueWin] Conexión cerrada (Código: ${statusCode}). ¿Reconectando?: ${shouldReconnect}`);
             io.emit('estado-conexion', 'desconectado');
 
             if (shouldReconnect) {
-                console.log('[TrueWin] Esperando 5 segundos antes de reintentar...');
                 setTimeout(() => { connectToWhatsApp(); }, 5000);
             } else {
-                console.log('[TrueWin] Base de datos vacía o desvinculada. Esperando escaneo de código QR original...');
+                console.log('[TrueWin] Sesión desvinculada desde el teléfono.');
+                ultimoQR = null;
             }
         } else if (connection === 'open') {
             console.log('[TrueWin] ¡CONEXIÓN GLOBAL CONFIGURADA EN LA NUBE CON FIRESTORE!');
@@ -175,28 +160,17 @@ async function connectToWhatsApp() {
     whatsappSock.ev.on('creds.update', saveCreds);
 }
 
-// Control del túnel de Sockets entrantes
 io.on('connection', (socket) => {
     console.log('[Socket.IO] ¡Nueva pestaña del CRM sincronizada al túnel en tiempo real!');
-    
-    // 1. Si WhatsApp ya está abierto y conectado de antes
     if (whatsappSock && whatsappSock.user) {
         socket.emit('estado-conexion', 'conectado');
-    } 
-    // 2. Si hay un código QR listo y esperando a ser escaneado
-    else if (ultimoQR) {
+    } else if (ultimoQR) {
         socket.emit('estado-conexion', 'desconectado');
         socket.emit('qr-update', ultimoQR);
-    } 
-    // 3. Si está en el arranque en frío (base de datos vacía pero inicializando)
-    else {
+    } else {
         socket.emit('estado-conexion', 'desconectado');
     }
 });
-
-// =========================================================================
-// 4. ENDPOINTS DE CONTROL (MÓDULOS DE DISPARO MULTIMEDIA)
-// =========================================================================
 
 app.get('/status', (req, res) => {
     if (whatsappSock && whatsappSock.user) {
@@ -241,7 +215,6 @@ app.post('/send-audio', async (req, res) => {
     }
 });
 
-// Arrancar servidor unificado
 httpServer.listen(PORT, () => {
     console.log(`[TrueWin-Web] Servidor de la Agencia corriendo en el puerto ${PORT}`);
 });
