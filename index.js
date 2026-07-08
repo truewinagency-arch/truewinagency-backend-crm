@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const pino = require('pino');
-// 1. IMPORTAMOS initAuthCreds PARA QUE SEPA QUÉ HACER CUANDO LA BASE ESTÉ VACÍA
 const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
@@ -10,17 +9,26 @@ const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore'); 
 const serviceAccount = require('./firebase-credentials.json');
 
+// =========================================================================
+// 0. DETECTORES DE ERRORES CRÍTICOS (Anti-colapsos silenciosos)
+// =========================================================================
+process.on('uncaughtException', (err) => console.error('\n[NODE FATAL] Excepción no capturada:', err));
+process.on('unhandledRejection', (reason, promise) => console.error('\n[NODE FATAL] Promesa rechazada no manejada:', reason));
 
+// =========================================================================
+// 1. INICIALIZACIÓN DE FIREBASE CON CONFIGURACIÓN DE TOLERANCIA
+// =========================================================================
 initializeApp({
     credential: cert(serviceAccount)
 });
 
-
-
 const db = getFirestore();
-db.settings({ ignoreUndefinedProperties: true });
+db.settings({ ignoreUndefinedProperties: true }); // Permite procesar variables vacías de Baileys
 const coleccionSesion = db.collection('whatsapp_session');
 
+// =========================================================================
+// 2. CONFIGURACIÓN DEL SERVIDOR HTTP Y WEBSOCKETS
+// =========================================================================
 const app = express();
 const PORT = process.env.PORT || 3000; 
 
@@ -31,13 +39,6 @@ const io = new Server(httpServer, {
         methods: ["GET", "POST"]
     }
 });
-
-/ =========================================================================
-// 0. DETECTORES DE ERRORES CRÍTICOS (Evita que el servidor muera en silencio)
-// =========================================================================
-process.on('uncaughtException', (err) => console.error('\n[NODE FATAL] Excepción no capturada:', err));
-process.on('unhandledRejection', (reason, promise) => console.error('\n[NODE FATAL] Promesa rechazada no manejada:', reason));
-
 
 app.use(cors({
     origin: '*',
@@ -58,19 +59,20 @@ app.use(express.json());
 let whatsappSock = null;
 let ultimoQR = null;
 
+// =========================================================================
+// 3. CONEXIÓN A WHATSAPP CON CACHÉ EN RAM + LOTES EN FIRESTORE
+// =========================================================================
 async function connectToWhatsApp() {
-    console.log("[TrueWin-Backend] Conectando con Firebase Firestore para verificar sesión remota...");
+    console.log("[TrueWin-Backend] Sincronizando e inicializando sesión remota...");
 
     let cacheCreds = {};
     let cacheKeys = {};
     let cacheCargada = false;
 
     const readState = async () => {
-        // Si ya descargamos las llaves una vez, las leemos de la RAM al instante
         if (cacheCargada) {
             return { creds: cacheCreds, keys: cacheKeys, tieneDatos: true };
         }
-
         try {
             console.log("[TrueWin-Optimizado] Descargando llaves desde Firestore por primera vez...");
             const snapshot = await coleccionSesion.get();
@@ -79,12 +81,11 @@ async function connectToWhatsApp() {
             snapshot.forEach(doc => {
                 tieneDatos = true;
                 const parsedData = JSON.parse(doc.data().payload, BufferJSON.reviver);
-                
                 if (doc.id === 'creds') cacheCreds = parsedData;
                 else cacheKeys[doc.id] = parsedData;
             });
 
-            if (tieneDatos) cacheCargada = true; // Marcamos que la RAM ya tiene la copia activa
+            if (tieneDatos) cacheCargada = true;
             return { creds: cacheCreds, keys: cacheKeys, tieneDatos };
         } catch (e) { 
             return { creds: {}, keys: {}, tieneDatos: false }; 
@@ -93,7 +94,6 @@ async function connectToWhatsApp() {
 
     const writeState = async (data, id) => {
         try {
-            // Actualizamos la caché de la RAM inmediatamente para que esté disponible sin retrasos
             if (id === 'creds') cacheCreds = data;
             else cacheKeys[id] = data;
 
@@ -119,7 +119,6 @@ async function connectToWhatsApp() {
             keys: {
                 get: async (type, ids) => {
                     const data = {};
-                    // 🚀 MEJORA DE VELOCIDAD CRÍTICA: Leemos directo de la RAM local sin ir a Firebase
                     for (const id of ids) {
                         const docId = `${type}-${id}`;
                         data[id] = cacheKeys[docId];
@@ -127,7 +126,6 @@ async function connectToWhatsApp() {
                     return data;
                 },
                 set: async (data) => {
-                    // 🚀 MAGIA: Usamos un Batch para guardar todo al instante y en perfecto orden
                     const batch = db.batch(); 
                     let contador = 0;
 
@@ -149,7 +147,6 @@ async function connectToWhatsApp() {
                         }
                     }
                     
-                    // Disparamos el lote completo a Firebase
                     if (contador > 0) {
                         await batch.commit().catch(e => console.error("Error en Lote de Firebase:", e));
                     }
@@ -160,13 +157,12 @@ async function connectToWhatsApp() {
             await writeState(state.creds, 'creds');
         }
     };
-        
 
-  whatsappSock = makeWASocket({
+    whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
         browser: ['TrueWin Agency', 'Chrome', '10.0'],
-        logger: pino({ level: 'debug' }) // 🚀 CAMBIADO A 'debug' PARA VER EL TRÁFICO CRUDO
+        logger: pino({ level: 'debug' }) // Modo diagnóstico activado para ver el tráfico crudo
     });
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
@@ -177,7 +173,6 @@ async function connectToWhatsApp() {
         io.emit('nuevo-mensaje', { numero, texto, hora: new Date().toISOString() });
     });
 
-    // Control de actualización de conexión optimizado para limpiar y reconectar el 515
     whatsappSock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -190,11 +185,9 @@ async function connectToWhatsApp() {
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
             console.log(`[TrueWin] Conexión cerrada (Código: ${statusCode}). ¿Reconectando?: ${shouldReconnect}`);
             io.emit('estado-conexion', 'desconectado');
 
-            // Limpiamos los listeners anteriores del socket viejo para evitar fugas de memoria o colisiones
             if (whatsappSock) {
                 try { whatsappSock.ev.removeAllListeners(); } catch (e) {}
                 whatsappSock = null;
@@ -229,6 +222,9 @@ io.on('connection', (socket) => {
     }
 });
 
+// =========================================================================
+// 4. ENDPOINTS DE CONTROL (MÓDULOS CON RASTREADORES INTERNOS)
+// =========================================================================
 app.get('/status', (req, res) => {
     if (whatsappSock && whatsappSock.user) {
         return res.json({ status: "connected", user: whatsappSock.user });
@@ -247,10 +243,9 @@ app.post('/send-text', async (req, res) => {
     }
 
     try {
-        // Limpiamos el número por si la web envía un '+' o espacios accidentalmente
         const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
         const jid = `${numeroLimpio}@s.whatsapp.net`;
-        console.log(`[Paso 3] JID Formateado listo para Meta: ${jid}`);
+        console.log(`[Paso 3] Jid Formateado listo para Meta: ${jid}`);
         
         console.log(`[Paso 4] Inyectando mensaje al motor de Baileys...`);
         const envio = await whatsappSock.sendMessage(jid, { text: mensaje });
@@ -259,7 +254,7 @@ app.post('/send-text', async (req, res) => {
         res.json({ success: true });
     } catch (error) {
         console.error(`\n[CRÍTICO] Fallo catastrófico al ejecutar whatsappSock.sendMessage:`);
-        console.error(error); // Imprime el rastro de la pila (stack trace)
+        console.error(error); // Nos mostrará la pila exacta del error
         res.status(500).json({ error: error.message || "Fallo interno" });
     }
     console.log(`====================================================\n`);
@@ -269,7 +264,8 @@ app.post('/send-image', async (req, res) => {
     const { numero, urlImagen, caption } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
-        const jid = `${numero}@s.whatsapp.net`;
+        const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
+        const jid = `${numeroLimpio}@s.whatsapp.net`;
         await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: caption });
         res.json({ success: true });
     } catch (error) {
@@ -281,7 +277,8 @@ app.post('/send-audio', async (req, res) => {
     const { numero, urlAudio } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
-        const jid = `${numero}@s.whatsapp.net`;
+        const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
+        const jid = `${numeroLimpio}@s.whatsapp.net`;
         await whatsappSock.sendMessage(jid, { audio: { url: urlAudio }, mimetype: 'audio/mp4', ptt: true });
         res.json({ success: true });
     } catch (error) {
@@ -289,12 +286,12 @@ app.post('/send-audio', async (req, res) => {
     }
 });
 
+// =========================================================================
+// 5. ARRANQUE SEGURO EN ORDEN
+// =========================================================================
 async function iniciarEcosistema() {
     try {
-        // 1. Forzamos al servidor a esperar que WhatsApp cargue su sesión de Firestore
         await connectToWhatsApp();
-        
-        // 2. Solo cuando WhatsApp esté listo, abrimos las puertas de la API HTTP y Sockets
         httpServer.listen(PORT, () => {
             console.log(`[TrueWin-Web] 🚀 API y WebSockets listos y escuchando en el puerto ${PORT}`);
         });
