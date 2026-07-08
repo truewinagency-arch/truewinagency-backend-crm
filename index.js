@@ -273,7 +273,7 @@ app.post('/send-audio', async (req, res) => {
         const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
         const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
         
-       await whatsappSock.sendMessage(jid, { audio: { url: urlAudio }, mimetype: 'audio/mp4' }); // Le quitamos el ptt: true
+        await whatsappSock.sendMessage(jid, { audio: { url: urlAudio }, mimetype: 'audio/mp4', ptt: true });
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando audio a ${numero}:`, error);
