@@ -121,6 +121,27 @@ app.get('/status', (req, res) => {
 });
 
 // =========================================================================
+// ENDPOINT: ENVIAR TEXTO PLANO
+// =========================================================================
+app.post('/send-text', async (req, res) => {
+    const { numero, mensaje } = req.body;
+
+    if (!whatsappSock) {
+        return res.status(500).json({ error: "El cliente de WhatsApp no está inicializado." });
+    }
+
+    try {
+        const jid = `${numero}@s.whatsapp.net`;
+        await whatsappSock.sendMessage(jid, { text: mensaje });
+        console.log(`[TrueWin-API] Mensaje enviado con éxito a ${numero}`);
+        res.json({ success: true, message: "Mensaje despachado." });
+    } catch (error) {
+        console.error("[TrueWin-API] Error enviando mensaje:", error);
+        res.status(500).json({ error: "Fallo al enviar el paquete de texto." });
+    }
+});
+
+// =========================================================================
 // ENDPOINT: ENVIAR IMAGEN CON PIE DE FOTO
 // =========================================================================
 app.post('/send-image', async (req, res) => {
