@@ -223,7 +223,7 @@ io.on('connection', (socket) => {
 });
 
 // =========================================================================
-// 4. ENDPOINTS DE CONTROL (MÓDULOS CON RASTREADORES INTERNOS)
+// 4. ENDPOINTS DE CONTROL (ACTUALIZADOS PARA SOPORTAR @lid Y @s.whatsapp.net)
 // =========================================================================
 app.get('/status', (req, res) => {
     if (whatsappSock && whatsappSock.user) {
@@ -233,42 +233,34 @@ app.get('/status', (req, res) => {
 });
 
 app.post('/send-text', async (req, res) => {
-    console.log(`\n============= [NUEVO INTENTO DE ENVÍO] =============`);
     const { numero, mensaje } = req.body;
-    console.log(`[Paso 1] Destinatario crudo recibido:`, numero);
-
-    if (!whatsappSock) {
-        console.error("[Paso 2] ERROR: El motor de WhatsApp está apagado o es null.");
-        return res.status(500).json({ error: "WhatsApp no inicializado." });
-    }
-
+    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
+        // 🚀 MAGIA: Detectamos de qué red proviene el usuario
+        const esLid = numero.toString().includes('lid');
         const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
-        const jid = `${numeroLimpio}@s.whatsapp.net`;
-        console.log(`[Paso 3] Jid Formateado listo para Meta: ${jid}`);
+        const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
         
-        console.log(`[Paso 4] Inyectando mensaje al motor de Baileys...`);
-        const envio = await whatsappSock.sendMessage(jid, { text: mensaje });
-        
-        console.log(`[Paso 5] ¡ÉXITO! Meta confirmó la recepción. Datos:`, JSON.stringify(envio));
+        await whatsappSock.sendMessage(jid, { text: mensaje });
         res.json({ success: true });
     } catch (error) {
-        console.error(`\n[CRÍTICO] Fallo catastrófico al ejecutar whatsappSock.sendMessage:`);
-        console.error(error); // Nos mostrará la pila exacta del error
-        res.status(500).json({ error: error.message || "Fallo interno" });
+        console.error(`[Error] Fallo enviando texto a ${numero}:`, error);
+        res.status(500).json({ error: error.message });
     }
-    console.log(`====================================================\n`);
 });
 
 app.post('/send-image', async (req, res) => {
     const { numero, urlImagen, caption } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
+        const esLid = numero.toString().includes('lid');
         const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
-        const jid = `${numeroLimpio}@s.whatsapp.net`;
+        const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
+        
         await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: caption });
         res.json({ success: true });
     } catch (error) {
+        console.error(`[Error] Fallo enviando imagen a ${numero}:`, error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -277,11 +269,14 @@ app.post('/send-audio', async (req, res) => {
     const { numero, urlAudio } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
+        const esLid = numero.toString().includes('lid');
         const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
-        const jid = `${numeroLimpio}@s.whatsapp.net`;
+        const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
+        
         await whatsappSock.sendMessage(jid, { audio: { url: urlAudio }, mimetype: 'audio/mp4', ptt: true });
         res.json({ success: true });
     } catch (error) {
+        console.error(`[Error] Fallo enviando audio a ${numero}:`, error);
         res.status(500).json({ error: error.message });
     }
 });
