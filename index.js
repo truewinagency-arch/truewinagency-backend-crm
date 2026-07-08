@@ -29,16 +29,31 @@ const coleccionSesion = db.collection('whatsapp_session');
 // 🚀 NUEVA COLECCIÓN: Cerebro de mensajes
 const coleccionMensajes = db.collection('mensajes_crm');
 
+// 🚀 NUEVO: Detector del número conectado actualmente al servidor
+function getHostNumber() {
+    if (whatsappSock && whatsappSock.user && whatsappSock.user.id) {
+        // Baileys guarda el número así: "584121234567:1@s.whatsapp.net". Esto lo limpia.
+        return whatsappSock.user.id.split(':')[0].split('@')[0]; 
+    }
+    return 'desconectado';
+}
+
 // 🚀 FUNCIÓN MAESTRA: Guarda cada disparo en la base de datos
 async function guardarMensajeBD(numero, nombre, texto, tipo) {
     try {
+        const hostActual = getHostNumber(); // Sabemos de quién es este mensaje
+        
+        // Si no hay host, no guardamos para evitar datos corruptos
+        if (hostActual === 'desconectado') return; 
+
         await coleccionMensajes.add({
+            host: hostActual, // <-- EL CANDADO DE AISLAMIENTO
             numero: numero,
             nombre: nombre || "Desconocido",
             texto: texto,
-            tipo: tipo, // 'in' (recibido) o 'out' (enviado)
+            tipo: tipo,
             hora: new Date().toISOString(),
-            timestamp: Date.now() // Sirve para ordenarlos cronológicamente luego
+            timestamp: Date.now() 
         });
     } catch (error) {
         console.error("Error guardando en historial:", error);
@@ -350,17 +365,30 @@ app.post('/send-audio', async (req, res) => {
 });
 app.get('/api/historial', async (req, res) => {
     try {
-        const snapshot = await coleccionMensajes.orderBy('timestamp', 'asc').get();
+        const hostActivo = getHostNumber();
+        
+        // Si no has escaneado el QR, devolvemos un historial vacío
+        if (hostActivo === 'desconectado') {
+            return res.json({ historial: {}, nombres: {} }); 
+        }
+
+        // 1. Buscamos SOLO los mensajes que le pertenecen a TU número conectado
+        const snapshot = await coleccionMensajes.where('host', '==', hostActivo).get();
+        
+        let todosLosMensajes = [];
+        snapshot.forEach(doc => todosLosMensajes.push(doc.data()));
+        
+        // 2. Ordenamos por fecha en la memoria del servidor
+        todosLosMensajes.sort((a, b) => a.timestamp - b.timestamp);
+
         const historial = {};
         const nombres = {};
         
-        snapshot.forEach(doc => {
-            const data = doc.data();
+        // 3. Empaquetamos la respuesta
+        todosLosMensajes.forEach(data => {
             if (!historial[data.numero]) historial[data.numero] = [];
-            
             historial[data.numero].push({ tipo: data.tipo, texto: data.texto, hora: data.hora });
 
-            // Guardamos el nombre real de la persona para usarlo en el diseño
             if (data.tipo === 'in' && data.nombre) nombres[data.numero] = data.nombre;
         });
         
