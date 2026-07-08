@@ -15,6 +15,7 @@ initializeApp({
 });
 
 const db = getFirestore();
+db.settings({ ignoreUndefinedProperties: true });
 const coleccionSesion = db.collection('whatsapp_session');
 
 const app = express();
