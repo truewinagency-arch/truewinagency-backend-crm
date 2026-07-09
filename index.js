@@ -204,14 +204,24 @@ async function connectToWhatsApp() {
         if (!msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') return;
         
         const remoteJid = msg.key.remoteJid;
-        const nombrePerfil = msg.pushName || "Usuario"; // 🚀 CAPTURAMOS EL NOMBRE DE WHATSAPP
+        const esGrupo = remoteJid.endsWith('@g.us');
         
-        const numeroLimpio = remoteJid.replace('@s.whatsapp.net', '').replace('@lid', '');
-        const identificador = remoteJid.includes('@lid') ? `${numeroLimpio}@lid` : numeroLimpio;
+        // 🚀 MAGIA PARA GRUPOS: Obtenemos el título del grupo
+        let nombrePerfil = msg.pushName || "Usuario"; 
+        if (esGrupo) {
+            try {
+                const metadata = await whatsappSock.groupMetadata(remoteJid);
+                nombrePerfil = metadata.subject || "Grupo de WhatsApp";
+            } catch (error) {
+                // Falla silenciosa si no logramos descargar el nombre a tiempo
+            }
+        }
+        
+        // Mantenemos las etiquetas @lid y @g.us para que el sistema las reconozca luego
+        const identificador = remoteJid.replace('@s.whatsapp.net', ''); 
 
         const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "[Multimedia/Sticker recibido]";
         
-        // 🚀 GUARDAMOS EN FIREBASE AL INSTANTE
         await guardarMensajeBD(identificador, nombrePerfil, texto, 'in');
 
         io.emit('nuevo-mensaje', { 
@@ -276,18 +286,39 @@ io.on('connection', (socket) => {
     socket.on('crm-presencia', async ({ numero, estado }) => {
         if (!whatsappSock) return;
         try {
-            // Evaluamos correctamente si el destino es un identificador @lid o un número normal
-            const esLid = numero.toString().includes('lid');
-            const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
-            const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
-            
-            // Enviamos el estado ('composing' o 'paused') directamente a los servidores de Meta
+            const jid = formatearJid(numero); // 🚀 Usamos el enrutador
             await whatsappSock.sendPresenceUpdate(estado, jid);
-        } catch (e) {
-            // Manejo silencioso para evitar spam en tu consola por micro-desconexiones del WebSocket
-        }
+        } catch (e) {}
     });
+
+// En tu Endpoint de Texto:
+app.post('/send-text', async (req, res) => {
+    const { numero, mensaje } = req.body;
+    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
+    try {
+        const jid = formatearJid(numero); // 🚀 Usamos el enrutador
+        
+        await whatsappSock.sendPresenceUpdate('composing', jid);
+        await delay(Math.floor(Math.random() * 2000) + 2500); 
+        
+        await whatsappSock.sendMessage(jid, { text: mensaje });
+        await whatsappSock.sendPresenceUpdate('paused', jid);
+
+        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); 
+        res.json({ success: true });
+    } catch (error) {
+        console.error(`[Error] Fallo enviando texto a ${numero}:`, error);
+        res.status(500).json({ error: error.message });
+    }
 });
+
+// 🚀 NUEVO ENRUTADOR INTELIGENTE: Detecta Grupos, LIDs y Personas
+function formatearJid(numero) {
+    const numStr = numero.toString();
+    if (numStr.includes('@g.us')) return numStr; // Es grupo (conserva sus guiones)
+    if (numStr.includes('@lid')) return numStr;  // Es identidad oculta
+    return `${numStr.replace(/[^0-9]/g, '')}@s.whatsapp.net`; // Es persona normal
+}
 
 // =========================================================================
 // 4. ENDPOINTS DE CONTROL (ACTUALIZADOS PARA SOPORTAR @lid Y @s.whatsapp.net)
