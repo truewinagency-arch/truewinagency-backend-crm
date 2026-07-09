@@ -387,21 +387,36 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje } = req.body;
-    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
+    if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
+    
     try {
-        const jid = formatearJid(numero);
+        const urls = mensaje.match(/(https?:\/\/[^\s]+)/g);
         
-        await whatsappSock.sendPresenceUpdate('composing', jid);
-        await delay(Math.floor(Math.random() * 2000) + 2500); 
-        
-        await whatsappSock.sendMessage(jid, { text: mensaje });
-        await whatsappSock.sendPresenceUpdate('paused', jid);
+        if (urls && urls.length > 0) {
+            const urlDetectada = urls[0];
+            const esGrupo = urlDetectada.includes('chat.whatsapp.com');
+            
+            await whatsappSock.sendMessage(numero, { 
+                text: mensaje,
+                contextInfo: {
+                    externalAdReply: {
+                        title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Toca aquí para abrir el enlace",
+                        body: "Truezone Agency",
+                        sourceUrl: urlDetectada,
+                        mediaType: 1,
+                        renderLargerThumbnail: true
+                    }
+                }
+            });
+        } else {
+            await whatsappSock.sendMessage(numero, { text: mensaje });
+        }
 
-        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); 
+        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error(`[Error] Fallo enviando texto a ${numero}:`, error);
-        res.status(500).json({ error: error.message });
+        console.error("Error enviando texto:", error);
+        res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
 
@@ -753,17 +768,25 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             }
 
             // Disparo nativo vía Baileys según la morfología de la secuencia
-            if (msj.tipo === 'texto') {
-                // 🚀 EVALUAMOS SI EL TEXTO CONTIENE UN ENLACE
-                const contieneLink = msj.texto.includes('http://') || msj.texto.includes('https://') || msj.texto.includes('chat.whatsapp.com');
+           if (msj.tipo === 'texto') {
+                // 🚀 ESCÁNER DE ENLACES: Busca si el texto contiene alguna URL
+                const urls = msj.texto.match(/(https?:\/\/[^\s]+)/g);
                 
-                if (contieneLink) {
-                    // Forzamos a Baileys a generar la metadata de la tarjeta visual
+                if (urls && urls.length > 0) {
+                    const urlDetectada = urls[0];
+                    const esGrupo = urlDetectada.includes('chat.whatsapp.com');
+
+                    // 🚀 TARJETA INTERACTIVA DE ALTA CONVERSIÓN
                     await whatsappSock.sendMessage(numeroDestino, { 
                         text: msj.texto,
-                        linkPreview: {
-                            "canonical-url": true,
-                            "matched-text": msj.texto
+                        contextInfo: {
+                            externalAdReply: {
+                                title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Toca aquí para abrir el enlace",
+                                body: "Truezone Agency", // Firma de la agencia
+                                sourceUrl: urlDetectada, // Hacia donde lleva el clic
+                                mediaType: 1, // Tipo de renderizado de tarjeta
+                                renderLargerThumbnail: true
+                            }
                         }
                     });
                 } else {
