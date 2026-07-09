@@ -301,6 +301,9 @@ async function connectToWhatsApp() {
         
         await guardarMensajeBD(identificador, nombrePerfil, texto, 'in', remitenteEspecifico, mediaUrl, mediaType);
 
+        // 🚀 CONEXIÓN DEL BOT: Activamos el evaluador en la nube sobre la marcha
+        procesarBotEnNube(identificador, texto);
+        
         io.emit('nuevo-mensaje', { 
             numero: identificador, 
             nombre: nombrePerfil, 
@@ -558,6 +561,29 @@ app.delete('/api/automatizaciones/:id', async (req, res) => {
     }
 });
 
+// 🚀 ENDPOINTS DE CONFIGURACIÓN GLOBAL DEL BOT EN LA NUBE
+app.get('/api/config/automatizaciones', async (req, res) => {
+    try {
+        const doc = await db.collection('crm_config').doc('automatizaciones').get();
+        if (!doc.exists) {
+            return res.json({ activo: false }); // Estado inicial por defecto
+        }
+        res.json(doc.data());
+    } catch (e) { 
+        res.status(500).json({ error: e.message }); 
+    }
+});
+
+app.post('/api/config/automatizaciones', async (req, res) => {
+    try {
+        const { activo } = req.body;
+        await db.collection('crm_config').doc('automatizaciones').set({ activo });
+        res.json({ success: true });
+    } catch (e) { 
+        res.status(500).json({ error: e.message }); 
+    }
+});
+
 
 // =========================================================================
 // 5. GESTOR DE PLANTILLAS DINÁMICAS (SECUENCIAS) Y MULTIMEDIA
@@ -623,6 +649,104 @@ app.post('/send-video', async (req, res) => {
     }
 });
 
+// 🚀 CEREBRO DEL CHATBOT EN LA NUBE: Evalúa palabras clave 24/7 de forma autónoma
+async function procesarBotEnNube(numeroCliente, textoMensaje) {
+    if (!textoMensaje || !whatsappSock) return;
+    const textoLimpio = textoMensaje.toLowerCase().trim();
+
+    try {
+        // 1. Validar si el switch general del bot está encendido
+        const configDoc = await db.collection('crm_config').doc('automatizaciones').get();
+        if (!configDoc.exists || !configDoc.data().activo) return;
+
+        // 2. Traer las reglas activas de automatización
+        const autosSnapshot = await db.collection('crm_automatizaciones').get();
+        let automatizaciones = [];
+        autosSnapshot.forEach(doc => automatizaciones.push(doc.data()));
+
+        for (const auto of automatizaciones) {
+            const keyword = auto.palabraClave.toLowerCase().trim();
+            let haceMatch = false;
+
+            if (auto.condicion === 'exacta' && textoLimpio === keyword) haceMatch = true;
+            if (auto.condicion === 'contiene' && textoLimpio.includes(keyword)) haceMatch = true;
+
+            if (haceMatch) {
+                console.log(`[🤖 Bot en Nube] MATCH detectado con "${keyword}". Extrayendo plantilla...`);
+                
+                // 3. Obtener la secuencia de mensajes asociada desde Firestore
+                const tplDoc = await db.collection('crm_plantillas').doc(auto.idPlantilla).get();
+                if (!tplDoc.exists) {
+                    console.error(`Plantilla ${auto.idPlantilla} ausente en Firestore.`);
+                    break;
+                }
+                
+                // Despachamos el hilo de mensajes de manera asíncrona en segundo plano
+                despacharFlujoDesdeNube(numeroCliente, tplDoc.data());
+                break; // Detiene la evaluación para evitar spam cruzado en el mismo mensaje
+            }
+        }
+    } catch (err) {
+        console.error("Fallo en el motor del bot en nube:", err);
+    }
+}
+
+// 🚀 DESPACHADOR ASÍNCRONO EN NUBE: Ejecuta secuencias con pausas humanas anti-ban
+async function despacharFlujoDesdeNube(numeroDestino, tpl) {
+    const pause = (ms) => new Promise(res => setTimeout(res, ms));
+    
+    for (const msj of tpl.secuencia) {
+        try {
+            let textoBurbuja = msj.texto || "";
+            let mUrl = msj.url || null;
+            let mType = null;
+
+            if (msj.tipo === 'media' && msj.url) {
+                mType = msj.url.includes('.mp4') || msj.url.includes('.mov') ? 'video' : 'image';
+                if (!textoBurbuja) textoBurbuja = mType === 'video' ? "[Video enviado]" : "[Imagen enviada]";
+            } else if (msj.tipo === 'audio') {
+                mType = 'audio';
+                textoBurbuja = "[Nota de voz enviada]";
+            }
+
+            // Disparo nativo vía Baileys según la morfología de la secuencia
+            if (msj.tipo === 'texto') {
+                await whatsappSock.sendMessage(numeroDestino, { text: msj.texto });
+            } else if (msj.tipo === 'media' && msj.url) {
+                if (mType === 'video') {
+                    await whatsappSock.sendMessage(numeroDestino, { video: { url: msj.url }, caption: msj.texto });
+                } else {
+                    await whatsappSock.sendMessage(numeroDestino, { image: { url: msj.url }, caption: msj.texto });
+                }
+            } else if (msj.tipo === 'audio' && msj.url) {
+                await whatsappSock.sendMessage(numeroDestino, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+            }
+
+            // Guardamos en el historial global de Firestore
+            await guardarMensajeBD(numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
+
+            // Emitimos por WebSockets para pintar los cambios en vivo en la web si está abierta
+            io.emit('nuevo-mensaje', {
+                numero: numeroDestino,
+                nombre: "TrueWin",
+                texto: textoBurbuja,
+                hora: new Date().toISOString(),
+                remitente: null,
+                mediaUrl: mUrl,
+                mediaType: mType,
+                tipo: 'out'
+            });
+
+            // Delay inteligente calculado en caliente en la nube (2.5s a 5.5s)
+            const delayHumano = Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500;
+            await pause(delayHumano);
+            
+        } catch (e) {
+            console.error("Error disparando pieza del bot en la nube:", e);
+        }
+    }
+}
+
 // =========================================================================
 // 6. ARRANQUE SEGURO EN ORDEN
 // =========================================================================
@@ -636,5 +760,7 @@ async function iniciarEcosistema() {
         console.error("[Crítico] Fallo al iniciar el ecosistema de TrueWin:", error);
     }
 }
+
+
 
 iniciarEcosistema();
