@@ -758,10 +758,8 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
     const pause = (ms) => new Promise(res => setTimeout(res, ms));
     
     try {
-        // 🧠 SIMULACIÓN DE LECTURA: Pausa inicial orgánica antes de interactuar.
-        // Hace que el bot espere un momento antes de ponerse en "Escribiendo...",
-        // simulando el tiempo que tardas en abrir el teléfono y leer el mensaje.
-        const tiempoLectura = Math.floor(Math.random() * (2200 - 1200 + 1)) + 1200; // Entre 1.2 y 2.2 segundos
+        // Simulación de lectura inicial humana antes de interactuar
+        const tiempoLectura = Math.floor(Math.random() * (2200 - 1200 + 1)) + 1200; 
         await pause(tiempoLectura);
     } catch (e) {}
 
@@ -771,8 +769,7 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             let mUrl = msj.url || null;
             let mType = null;
 
-            // 🚀 APLICAMOS EL SPINTAX AUTOMÁTICO PARA LA SALIDA REAL DE WHATSAPP
-            // Esto cambia "{hola|saludos}" por "hola" o "saludos" de forma aleatoria
+            // 🚀 PROCESAMIENTO ÚNICO: Aquí unificamos la variable maestra de texto
             let textoBurbuja = msj.tipo === 'texto' || msj.tipo === 'media' ? procesarSpintax(textoOriginal) : textoOriginal;
 
             if (msj.tipo === 'media' && msj.url) {
@@ -783,18 +780,16 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 textoBurbuja = "[Nota de voz enviada]";
             }
 
-            // 🚀 TELEMETRÍA HUMANA AJUSTADA Y DINÁMICA
+            // Telemetría humana dinámica
             try {
                 if (msj.tipo === 'audio') {
                     await whatsappSock.sendPresenceUpdate('recording', numeroDestino);
-                    await pause(4000); // Sostiene el "Grabando audio..." por 4 segundos estables
+                    await pause(4000); 
                 } else {
                     await whatsappSock.sendPresenceUpdate('composing', numeroDestino);
                     
-                    // 📊 ALGORITMO DE TIPEO REALISTA:
-                    // Calculamos 15 milisegundos por cada carácter (letra, espacio, emoji).
-                    // Establecemos un mínimo de 1.5 segundos y un máximo de 4.5 segundos para no trancar el bot.
-                    const caracteres = msj.texto ? msj.texto.length : 20;
+                    // Algoritmo de tipeo realista según el largo del texto real
+                    const caracteres = textoBurbuja ? textoBurbuja.length : 20;
                     let tiempoTipeo = caracteres * 15; 
                     if (tiempoTipeo < 1500) tiempoTipeo = 1500;
                     if (tiempoTipeo > 4500) tiempoTipeo = 4500;
@@ -803,10 +798,10 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                     await pause(tiempoTipeo); 
                 }
             } catch (e) { 
-                console.warn("No se pudo actualizar la telemetría de presencia en la nube:", e.message); 
+                console.warn("No se pudo actualizar la telemetría de presencia:", e.message); 
             }
 
-            // Disparo nativo vía Baileys según la morfología de la secuencia
+            // 🚀 DISPARO CORREGIDO: Forzamos a Baileys a usar 'textoBurbuja' obligatoriamente
             if (msj.tipo === 'texto') {
                 await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
             } else if (msj.tipo === 'media' && msj.url) {
@@ -819,15 +814,13 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 await whatsappSock.sendMessage(numeroDestino, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
             }
 
-            // APAGAR ESTADO: Avisamos a Meta que pausamos la escritura
-            try {
-                await whatsappSock.sendPresenceUpdate('paused', numeroDestino);
-            } catch (e) {}
+            // Apagamos estado de presencia
+            try { await whatsappSock.sendPresenceUpdate('paused', numeroDestino); } catch (e) {}
 
-            // Guardamos en el historial global de Firestore
+            // Guardamos en el historial de Firestore usando el texto real despachado
             await guardarMensajeBD(numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
 
-            // Emitimos por WebSockets para pintar los cambios en vivo en la web
+            // Emitimos por WebSockets al CRM visual
             io.emit('nuevo-mensaje', {
                 numero: numeroDestino,
                 nombre: "TrueWin",
@@ -839,7 +832,7 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 tipo: 'out'
             });
 
-            // Delay inteligente calculado en caliente en la nube entre piezas de la secuencia (2.5s a 5.5s)
+            // Delay de separación orgánico entre piezas de la secuencia
             const delayHumano = Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500;
             await pause(delayHumano);
             
