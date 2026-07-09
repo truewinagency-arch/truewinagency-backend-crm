@@ -39,10 +39,9 @@ function getHostNumber() {
 }
 
 // 🚀 FUNCIÓN MAESTRA: Guarda cada disparo en la base de datos
-async function guardarMensajeBD(numero, nombre, texto, tipo) {
+async function guardarMensajeBD(numero, nombre, texto, tipo, remitente = null) {
     try {
         const hostActual = getHostNumber(); 
-        
         if (hostActual === 'desconectado') return; 
 
         await coleccionMensajes.add({
@@ -51,6 +50,7 @@ async function guardarMensajeBD(numero, nombre, texto, tipo) {
             nombre: nombre || "Desconocido",
             texto: texto,
             tipo: tipo,
+            remitente: remitente, // 🚀 NUEVO: Almacena quién escribió dentro del grupo
             hora: new Date().toISOString(),
             timestamp: Date.now() 
         });
@@ -214,25 +214,31 @@ async function connectToWhatsApp() {
         const esGrupo = remoteJid.endsWith('@g.us');
         
         let nombrePerfil = msg.pushName || "Usuario"; 
+        let remitenteEspecifico = null; // 🚀 Si es chat privado, se queda en null
+
         if (esGrupo) {
+            // Extraemos el nombre de la persona que escribió dentro del grupo
+            remitenteEspecifico = msg.pushName || msg.key.participant?.split('@')[0] || "Miembro";
             try {
                 const metadata = await whatsappSock.groupMetadata(remoteJid);
                 nombrePerfil = metadata.subject || "Grupo de WhatsApp";
             } catch (error) {
-                // Falla silenciosa si no logra resolver metadatos inmediatamente
+                nombrePerfil = "Grupo de WhatsApp";
             }
         }
         
         const identificador = remoteJid; 
         const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "[Multimedia/Sticker recibido]";
         
-        await guardarMensajeBD(identificador, nombrePerfil, texto, 'in');
+        // 🚀 PASAMOS EL REMITENTE A LA BASE DE DATOS
+        await guardarMensajeBD(identificador, nombrePerfil, texto, 'in', remitenteEspecifico);
 
         io.emit('nuevo-mensaje', { 
             numero: identificador, 
             nombre: nombrePerfil, 
             texto: texto, 
-            hora: new Date().toISOString() 
+            hora: new Date().toISOString(),
+            remitente: remitenteEspecifico // 🚀 LO ENVIAMOS AL CRM EN TIEMPO REAL
         });
     });
 
@@ -385,7 +391,12 @@ app.get('/api/historial', async (req, res) => {
         
         todosLosMensajes.forEach(data => {
             if (!historial[data.numero]) historial[data.numero] = [];
-            historial[data.numero].push({ tipo: data.tipo, texto: data.texto, hora: data.hora });
+            historial[data.numero].push({ 
+                tipo: data.tipo, 
+                texto: data.texto, 
+                hora: data.hora,
+                remitente: data.remitente || null // 🚀 LE ENTREGAMOS EL REMITENTE A LA WEB
+            });
 
             if (data.tipo === 'in' && data.nombre) nombres[data.numero] = data.nombre;
         });
