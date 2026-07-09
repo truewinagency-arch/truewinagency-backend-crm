@@ -240,15 +240,18 @@ async function connectToWhatsApp() {
         let mediaUrl = null;
         let mediaType = null;
 
-        if (messageType === 'imageMessage') {
+       if (messageType === 'imageMessage') {
             mediaType = 'image';
-            texto = msg.message.imageMessage.caption || "[Imagen recibida]";
+            // 🚀 CORREGIDO: Si no hay caption, se guarda un texto vacío "" en lugar de "[Imagen recibida]"
+            texto = msg.message.imageMessage.caption || ""; 
         } else if (messageType === 'videoMessage') {
             mediaType = 'video';
-            texto = msg.message.videoMessage.caption || "[Video recibido]";
+            // 🚀 CORREGIDO: Si no hay caption, se guarda un texto vacío "" en lugar de "[Video recibido]"
+            texto = msg.message.videoMessage.caption || ""; 
         } else if (messageType === 'audioMessage') {
             mediaType = 'audio';
-            texto = "[Audio/Nota de voz recibida]";
+            // 🚀 CORREGIDO: Las notas de voz no llevan texto complementario, lo dejamos vacío
+            texto = ""; 
         } else if (!texto) {
             texto = "[Archivo o mensaje interactivo recibido]";
         }
