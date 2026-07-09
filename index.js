@@ -375,7 +375,9 @@ whatsappSock.ev.on('connection.update', async (update) => {
         // 🚀 RECONEXIÓN AUTOMÁTICA NORMAL (Aquí cae el 515 de forma segura)
         // Cuando WhatsApp pida un reinicio de flujo, el bot esperará 3 segundos y levantará el canal limpio
         console.log(`[TrueWin] Reiniciando flujo de forma limpia en 3 segundos (Código: ${codigoError})...`);
-        setTimeout(() => iniciarConexionEnVivo(), 3000); 
+        
+        // 🚀 CORREGIDO: Llamamos a la función correcta del backend
+        setTimeout(() => connectToWhatsApp(), 3000); 
     }
     
     if (connection === 'open') {
