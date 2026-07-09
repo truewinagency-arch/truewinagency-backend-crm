@@ -754,8 +754,22 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
 
             // Disparo nativo vía Baileys según la morfología de la secuencia
             if (msj.tipo === 'texto') {
-                await whatsappSock.sendMessage(numeroDestino, { text: msj.texto });
-            } else if (msj.tipo === 'media' && msj.url) {
+                // Evaluamos si el texto contiene un enlace (http o https) o un link de grupo de whatsapp
+                const contieneLink = msj.texto.includes('http://') || msj.texto.includes('https://') || msj.texto.includes('chat.whatsapp.com');
+                
+                if (contieneLink) {
+                    // 🚀 FORZAMOS A BAILEYS A GENERAR LA METADATA E INYECTAR EL BOTÓN NATIVO
+                    await whatsappSock.sendMessage(numeroDestino, { 
+                        text: msj.texto,
+                        linkPreview: {
+                            "canonical-url": true,
+                            "matched-text": msj.texto
+                        }
+                    });
+                } else {
+                    // Si no tiene enlaces, se va como un mensaje de texto normal
+                    await whatsappSock.sendMessage(numeroDestino, { text: msj.texto });
+                } else if (msj.tipo === 'media' && msj.url) {
                 if (mType === 'video') {
                     await whatsappSock.sendMessage(numeroDestino, { video: { url: msj.url }, caption: msj.texto });
                 } else {
