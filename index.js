@@ -404,32 +404,14 @@ app.post('/send-text', async (req, res) => {
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
     
     try {
-        const urls = mensaje.match(/(https?:\/\/[^\s]+)/g);
-        
-        if (urls && urls.length > 0) {
-            const urlDetectada = urls[0];
-            const esGrupo = urlDetectada.includes('chat.whatsapp.com');
-            
-            await whatsappSock.sendMessage(numero, { 
-                text: mensaje,
-                contextInfo: {
-                    externalAdReply: {
-                        title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Toca aquí para abrir el enlace",
-                        body: "Truezone Agency",
-                        sourceUrl: urlDetectada,
-                        mediaType: 1,
-                        showAdAttribution: true
-                    }
-                }
-            });
-        } else {
-            await whatsappSock.sendMessage(numero, { text: mensaje });
-        }
+        // 🚀 Procesamos el spintax del mensaje manual antes de evaluar links o enviar
+        const mensajeFinal = procesarSpintax(mensaje);
 
-        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out');
+        await whatsappSock.sendMessage(numero, { text: mensajeFinal });
+        await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
+        
         res.json({ success: true });
     } catch (error) {
-        console.error("Error enviando texto:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
@@ -752,11 +734,23 @@ async function procesarBotEnNube(numeroCliente, textoMensaje) {
 async function despacharFlujoDesdeNube(numeroDestino, tpl) {
     const pause = (ms) => new Promise(res => setTimeout(res, ms));
     
+    try {
+        // 🧠 SIMULACIÓN DE LECTURA: Pausa inicial orgánica antes de interactuar.
+        // Hace que el bot espere un momento antes de ponerse en "Escribiendo...",
+        // simulando el tiempo que tardas en abrir el teléfono y leer el mensaje.
+        const tiempoLectura = Math.floor(Math.random() * (2200 - 1200 + 1)) + 1200; // Entre 1.2 y 2.2 segundos
+        await pause(tiempoLectura);
+    } catch (e) {}
+
     for (const msj of tpl.secuencia) {
         try {
-            let textoBurbuja = msj.texto || "";
+            let textoOriginal = msj.texto || "";
             let mUrl = msj.url || null;
             let mType = null;
+
+            // 🚀 APLICAMOS EL SPINTAX AUTOMÁTICO PARA LA SALIDA REAL DE WHATSAPP
+            // Esto cambia "{hola|saludos}" por "hola" o "saludos" de forma aleatoria
+            let textoBurbuja = msj.tipo === 'texto' || msj.tipo === 'media' ? procesarSpintax(textoOriginal) : textoOriginal;
 
             if (msj.tipo === 'media' && msj.url) {
                 mType = msj.url.includes('.mp4') || msj.url.includes('.mov') ? 'video' : 'image';
@@ -766,37 +760,43 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 textoBurbuja = "[Nota de voz enviada]";
             }
 
-            // 🚀 TELEMETRÍA HUMANA AUTOMÁTICA: Activamos "Escribiendo..." o "Grabando audio..." antes del disparo
+            // 🚀 TELEMETRÍA HUMANA AJUSTADA Y DINÁMICA
             try {
                 if (msj.tipo === 'audio') {
-                    // Le avisa a WhatsApp que el robot está grabando una nota de voz
                     await whatsappSock.sendPresenceUpdate('recording', numeroDestino);
-                    await pause(3500); // Sostiene el "Grabando audio..." por 3.5 segundos para simular realismo
+                    await pause(4000); // Sostiene el "Grabando audio..." por 4 segundos estables
                 } else {
-                    // Le avisa a WhatsApp que el robot está escribiendo texto
                     await whatsappSock.sendPresenceUpdate('composing', numeroDestino);
-                    await pause(2000); // Sostiene el "Escribiendo..." por 2 segundos simulación de tipeo
+                    
+                    // 📊 ALGORITMO DE TIPEO REALISTA:
+                    // Calculamos 15 milisegundos por cada carácter (letra, espacio, emoji).
+                    // Establecemos un mínimo de 1.5 segundos y un máximo de 4.5 segundos para no trancar el bot.
+                    const caracteres = msj.texto ? msj.texto.length : 20;
+                    let tiempoTipeo = caracteres * 15; 
+                    if (tiempoTipeo < 1500) tiempoTipeo = 1500;
+                    if (tiempoTipeo > 4500) tiempoTipeo = 4500;
+                    
+                    console.log(`[Anti-Ban] Simulando tipeo por ${tiempoTipeo / 1000}s para un mensaje de ${caracteres} letras.`);
+                    await pause(tiempoTipeo); 
                 }
             } catch (e) { 
                 console.warn("No se pudo actualizar la telemetría de presencia en la nube:", e.message); 
             }
 
             // Disparo nativo vía Baileys según la morfología de la secuencia
-           if (msj.tipo === 'texto') {
-                // Envío directo de texto sin forzar metadatos para garantizar el 100% de entrega
-                await whatsappSock.sendMessage(numeroDestino, { text: msj.texto });
-                
+            if (msj.tipo === 'texto') {
+                await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
             } else if (msj.tipo === 'media' && msj.url) {
                 if (mType === 'video') {
-                    await whatsappSock.sendMessage(numeroDestino, { video: { url: msj.url }, caption: msj.texto });
+                    await whatsappSock.sendMessage(numeroDestino, { video: { url: msj.url }, caption: textoBurbuja });
                 } else {
-                    await whatsappSock.sendMessage(numeroDestino, { image: { url: msj.url }, caption: msj.texto });
+                    await whatsappSock.sendMessage(numeroDestino, { image: { url: msj.url }, caption: textoBurbuja });
                 }
             } else if (msj.tipo === 'audio' && msj.url) {
                 await whatsappSock.sendMessage(numeroDestino, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
             }
 
-            // 🚀 APAGAR ESTADO: Le avisamos a Meta que el operador dejó de interactuar en este bloque
+            // APAGAR ESTADO: Avisamos a Meta que pausamos la escritura
             try {
                 await whatsappSock.sendPresenceUpdate('paused', numeroDestino);
             } catch (e) {}
@@ -804,7 +804,7 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             // Guardamos en el historial global de Firestore
             await guardarMensajeBD(numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
 
-            // Emitimos por WebSockets para pintar los cambios en vivo en la web si está abierta
+            // Emitimos por WebSockets para pintar los cambios en vivo en la web
             io.emit('nuevo-mensaje', {
                 numero: numeroDestino,
                 nombre: "TrueWin",
@@ -816,7 +816,7 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 tipo: 'out'
             });
 
-            // Delay inteligente calculado en caliente en la nube entre mensajes (2.5s a 5.5s)
+            // Delay inteligente calculado en caliente en la nube entre piezas de la secuencia (2.5s a 5.5s)
             const delayHumano = Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500;
             await pause(delayHumano);
             
@@ -838,6 +838,17 @@ async function iniciarEcosistema() {
     } catch (error) {
         console.error("[Crítico] Fallo al iniciar el ecosistema de TrueWin:", error);
     }
+}
+
+// 🚀 PROCESADOR DE SPINTAX DIRECTO EN CAPA DE RED
+function procesarSpintax(texto) {
+    if (!texto) return "";
+    // Escanea bloques estilo {opcion1|opcion2|opcion3} de forma recursiva
+    return texto.replace(/\{([^{}]+)\}/g, (match, opciones) => {
+        const arrayOpciones = opciones.split('|');
+        // Elige un índice aleatorio en caliente
+        return arrayOpciones[Math.floor(Math.random() * arrayOpciones.length)].trim();
+    });
 }
 
 
