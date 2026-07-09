@@ -291,27 +291,6 @@ io.on('connection', (socket) => {
         } catch (e) {}
     });
 
-// En tu Endpoint de Texto:
-app.post('/send-text', async (req, res) => {
-    const { numero, mensaje } = req.body;
-    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
-    try {
-        const jid = formatearJid(numero); // 🚀 Usamos el enrutador
-        
-        await whatsappSock.sendPresenceUpdate('composing', jid);
-        await delay(Math.floor(Math.random() * 2000) + 2500); 
-        
-        await whatsappSock.sendMessage(jid, { text: mensaje });
-        await whatsappSock.sendPresenceUpdate('paused', jid);
-
-        await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); 
-        res.json({ success: true });
-    } catch (error) {
-        console.error(`[Error] Fallo enviando texto a ${numero}:`, error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
 // 🚀 NUEVO ENRUTADOR INTELIGENTE: Detecta Grupos, LIDs y Personas
 function formatearJid(numero) {
     const numStr = numero.toString();
@@ -339,21 +318,14 @@ app.post('/send-text', async (req, res) => {
     const { numero, mensaje } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
-        const esLid = numero.toString().includes('lid');
-        const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
-        const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
+        const jid = formatearJid(numero); // 🚀 Usamos el enrutador
         
-        // 🚀 CAMUFLAJE 1: Mostramos "Escribiendo..." en el teléfono del cliente
         await whatsappSock.sendPresenceUpdate('composing', jid);
-        
-        // Generamos un tiempo de espera aleatorio entre 2.5 y 4.5 segundos simulando el tipeo humano
         await delay(Math.floor(Math.random() * 2000) + 2500); 
         
-        // Despachamos el mensaje y pausamos el estado de presencia
         await whatsappSock.sendMessage(jid, { text: mensaje });
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        // Guardamos de forma segura en tu base de datos mensajes_crm
         await guardarMensajeBD(numero, "TrueWin", mensaje, 'out'); 
         res.json({ success: true });
     } catch (error) {
