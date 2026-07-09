@@ -439,17 +439,44 @@ app.post('/send-text', async (req, res) => {
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
     
     try {
+        // 1. Procesamos spintax y formateamos el JID oficial de Meta
         const mensajeFinal = procesarSpintax(mensaje);
-        
-        // 🚀 CORRECCIÓN DE JID: Obligamos a usar el formato oficial de Meta
         const jidReal = formatearJid(numero);
 
-        await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
-        await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
+        // 🔍 2. ESCÁNER DE ENLACES: Buscamos si el texto contiene una URL válida
+        const urls = mensajeFinal.match(/(https?:\/\/[^\s]+)/g);
         
+        if (urls && urls.length > 0) {
+            const urlDetectada = urls[0];
+            const esGrupo = urlDetectada.includes('chat.whatsapp.com');
+
+            console.log(`[Link Detectado] Generando tarjeta enriquecida para: ${urlDetectada}`);
+
+            // 🚀 DISPARO CON TARJETA ENRIQUECIDA (Baja por el canal con encriptación sana)
+            await whatsappSock.sendMessage(jidReal, { 
+                text: mensajeFinal,
+                contextInfo: {
+                    externalAdReply: {
+                        title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Toca aquí para abrir el enlace",
+                        body: "Truezone Agency",
+                        sourceUrl: urlDetectada,
+                        // 🌟 LA CLAVE: Imagen pública fija (Negro/Dorado) que evita que la Promesa se congele
+                        thumbnailUrl: "https://i.imgur.com/jM8A80e.jpg", 
+                        mediaType: 1,
+                        showAdAttribution: true
+                    }
+                }
+            });
+        } else {
+            // Si es un texto plano corriente sin enlaces, se va directo de forma tradicional
+            await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
+        }
+
+        // 3. Guardamos el registro en el historial y respondemos éxito a la web
+        await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual:", error);
+        console.error("Fallo al enviar texto manual con tarjeta:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
