@@ -24,10 +24,9 @@ initializeApp({
 
 const db = getFirestore();
 db.settings({ ignoreUndefinedProperties: true });
-const coleccionSesion = db.collection('whatsapp_session');
-
-// 🚀 COLECCIÓN: Cerebro de mensajes
-const coleccionMensajes = db.collection('mensajes_crm');
+const coleccionSesion = db.collection('crm_whatsapp_session');
+const coleccionMensajes = db.collection('crm_mensajes');
+const coleccionPlantillas = db.collection('crm_plantillas'); // 🚀 NUEVA BASE PARA PLANTILL
 
 // 🚀 DETECTOR DEL NÚMERO CONECTADO ACTUALMENTE AL SERVIDOR
 function getHostNumber() {
@@ -408,8 +407,38 @@ app.get('/api/historial', async (req, res) => {
     }
 });
 
+
 // =========================================================================
-// 5. ARRANQUE SEGURO EN ORDEN
+// 5. ENDPOINTS PARA EL GESTOR DE PLANTILLAS DINÁMICAS
+// =========================================================================
+app.get('/api/plantillas', async (req, res) => {
+    try {
+        const snapshot = await coleccionPlantillas.get();
+        const plantillas = [];
+        snapshot.forEach(doc => plantillas.push({ id: doc.id, ...doc.data() }));
+        res.json(plantillas);
+    } catch (error) {
+        console.error("Error obteniendo plantillas:", error);
+        res.status(500).json({ error: "Fallo al obtener plantillas" });
+    }
+});
+
+app.post('/api/plantillas', async (req, res) => {
+    try {
+        // Recibe: { nombre, icono, texto, tipoMedia, urlMedia }
+        const nuevaPlantilla = req.body;
+        nuevaPlantilla.timestamp = Date.now();
+        
+        const docRef = await coleccionPlantillas.add(nuevaPlantilla);
+        res.json({ success: true, id: docRef.id });
+    } catch (error) {
+        console.error("Error guardando plantilla:", error);
+        res.status(500).json({ error: "Fallo al guardar plantilla" });
+    }
+});
+
+// =========================================================================
+// 6. ARRANQUE SEGURO EN ORDEN
 // =========================================================================
 async function iniciarEcosistema() {
     try {
