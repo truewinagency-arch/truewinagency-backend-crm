@@ -775,7 +775,7 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                     const urlDetectada = urls[0];
                     const esGrupo = urlDetectada.includes('chat.whatsapp.com');
 
-                    // 🚀 CÓDIGO BLINDADO: Sin imágenes gigantes que congelen el servidor
+                    // 🚀 CANDADO DE SEGURIDAD: Inyectamos thumbnailUrl para evitar el cuelgue
                     await whatsappSock.sendMessage(numeroDestino, { 
                         text: msj.texto,
                         contextInfo: {
@@ -783,8 +783,9 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                                 title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Toca aquí para abrir el enlace",
                                 body: "Truezone Agency",
                                 sourceUrl: urlDetectada,
+                                thumbnailUrl: "https://i.imgur.com/jM8A80e.jpg", // 🚀 Imagen por defecto (Negro/Dorado) que destraba la Promesa
                                 mediaType: 1,
-                                showAdAttribution: true // Añade un ícono/estilo especial de oficial
+                                showAdAttribution: true
                             }
                         }
                     });
