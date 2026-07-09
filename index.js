@@ -446,7 +446,7 @@ app.post('/send-audio', async (req, res) => {
     }
 });
 
-app.get('/api/api/historial', async (req, res) => {
+app.get('/api/historial', async (req, res) => {
     try {
         const hostActivo = getHostNumber();
         if (hostActivo === 'desconectado') {
