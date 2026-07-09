@@ -169,7 +169,8 @@ async function connectToWhatsApp() {
                     return data;
                 },
                 set: async (data) => {
-                    const batch = db.batch(); 
+                    // 🚀 CAMBIO 1: Usamos 'let' para poder reasignar el lote más adelante
+                    let batch = db.batch(); 
                     let contador = 0;
 
                     for (const type in data) {
@@ -177,8 +178,7 @@ async function connectToWhatsApp() {
                             const value = data[type][id];
                             const docId = `${type}-${id}`;
                             
-                            // 🚀 FILTRO ANTI-BASURA DIGITAL (CORREGIDO)
-                            // SOLO bloqueamos los lid-mapping. Las llaves de sincronización DEBEN guardarse.
+                            // Filtro Anti-Basura (Solo bloqueamos los grupos)
                             if (docId.includes('lid-mapping')) {
                                 continue; 
                             }
@@ -196,11 +196,11 @@ async function connectToWhatsApp() {
                             
                             contador++;
                             
-                            // Firestore tiene un límite de 500 operaciones por lote. 
-                            // Si por algún motivo llegamos a 490, ejecutamos y limpiamos para evitar crasheos.
+                            // 🚀 CAMBIO 2: Cuando llegamos a 490, subimos a la nube Y CREAMOS UN LOTE NUEVO FRESCO
                             if (contador >= 490) {
-                                await batch.commit().catch(e => {});
-                                contador = 0; // Reiniciamos contador para el siguiente lote
+                                await batch.commit().catch(e => console.error("Error en lote parcial:", e));
+                                batch = db.batch(); // <--- LA PIEZA FALTANTE: Inicializar lote nuevo
+                                contador = 0; 
                             }
                         }
                     }
