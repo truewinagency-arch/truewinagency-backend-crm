@@ -460,16 +460,49 @@ app.post('/send-image', async (req, res) => {
     try {
         const jid = formatearJid(numero);
         
+        // 🌟 PIEZA CORRECTORA: Procesamos las llaves del pie de foto en caliente
+        const captionFinal = procesarSpintax(caption);
+
         await whatsappSock.sendPresenceUpdate('composing', jid);
         await delay(Math.floor(Math.random() * 1500) + 2000); 
         
-        await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: caption });
+        // Enviamos a Baileys el caption ya procesado y aleatorio
+        await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: captionFinal });
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        await guardarMensajeBD(numero, "TrueWin", caption || "[Imagen enviada]", 'out', null, urlImagen, 'image');
+        // Guardamos en la base de datos con el texto real que vió el usuario
+        await guardarMensajeBD(numero, "TrueWin", captionFinal || "[Imagen enviada]", 'out', null, urlImagen, 'image');
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando imagen a ${numero}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// =====================================================================
+// 🚀 ENDPOINT DE VIDEO PARCHEADO CON SOPORTE SPINTAX
+// =====================================================================
+app.post('/send-video', async (req, res) => {
+    const { numero, urlVideo, caption } = req.body;
+    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
+    try {
+        const jid = formatearJid(numero);
+        
+        // 🌟 PIEZA CORRECTORA: Procesamos las llaves del pie de video en caliente
+        const captionFinal = procesarSpintax(caption);
+
+        await whatsappSock.sendPresenceUpdate('composing', jid);
+        await delay(Math.floor(Math.random() * 2000) + 3000); 
+        
+        // Enviamos a Baileys el caption ya procesado y aleatorio
+        await whatsappSock.sendMessage(jid, { video: { url: urlVideo }, caption: captionFinal });
+        await whatsappSock.sendPresenceUpdate('paused', jid);
+
+        // Guardamos en la base de datos con el texto real que vió el usuario
+        await guardarMensajeBD(numero, "TrueWin", captionFinal || "[Video enviado]", 'out', null, urlVideo, 'video');
+        res.json({ success: true });
+    } catch (error) {
+        console.error(`[Error] Fallo enviando video a ${numero}:`, error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -677,26 +710,7 @@ app.delete('/api/plantillas/:id', async (req, res) => {
     }
 });
 
-// 🚀 NUEVO ENDPOINT: Soporte nativo para videos
-app.post('/send-video', async (req, res) => {
-    const { numero, urlVideo, caption } = req.body;
-    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
-    try {
-        const jid = formatearJid(numero);
-        
-        await whatsappSock.sendPresenceUpdate('composing', jid);
-        await delay(Math.floor(Math.random() * 2000) + 3000); // Simula más peso de carga
-        
-        await whatsappSock.sendMessage(jid, { video: { url: urlVideo }, caption: caption });
-        await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        await guardarMensajeBD(numero, "TrueWin", caption || "[Video enviado]", 'out', null, urlVideo, 'video');
-        res.json({ success: true });
-    } catch (error) {
-        console.error(`[Error] Fallo enviando video a ${numero}:`, error);
-        res.status(500).json({ error: error.message });
-    }
-});
 
 // 🚀 CEREBRO DEL CHATBOT EN LA NUBE: Evalúa palabras clave 24/7 de forma autónoma
 // 🚀 AJUSTE EN EN backend (index.js): Fuerza el visto automático en la nube antes de disparar
