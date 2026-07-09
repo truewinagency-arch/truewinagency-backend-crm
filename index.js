@@ -176,6 +176,12 @@ async function connectToWhatsApp() {
                         for (const id in data[type]) {
                             const value = data[type][id];
                             const docId = `${type}-${id}`;
+                            
+                            // 🚀 FILTRO ANTI-BASURA DIGITAL: Bloqueamos metadatos inútiles de Baileys
+                            if (docId.includes('lid-mapping') || docId.includes('app-state-sync') || docId.includes('sender-key')) {
+                                continue; // Nos saltamos este ciclo, esto NO entra a la base de datos
+                            }
+
                             const docRef = coleccionSesion.doc(docId);
                             
                             if (value) {
@@ -186,7 +192,15 @@ async function connectToWhatsApp() {
                                 delete cacheKeys[docId];
                                 batch.delete(docRef);
                             }
+                            
                             contador++;
+                            
+                            // Firestore tiene un límite de 500 operaciones por lote. 
+                            // Si por algún motivo llegamos a 490, ejecutamos y limpiamos para evitar crasheos.
+                            if (contador >= 490) {
+                                await batch.commit().catch(e => {});
+                                contador = 0; // Reiniciamos contador para el siguiente lote
+                            }
                         }
                     }
                     
