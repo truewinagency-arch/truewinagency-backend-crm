@@ -414,7 +414,7 @@ app.get('/api/historial', async (req, res) => {
 
 
 // =========================================================================
-// 5. ENDPOINTS PARA EL GESTOR DE PLANTILLAS DINÁMICAS
+// 5. GESTOR DE PLANTILLAS DINÁMICAS (SECUENCIAS) Y MULTIMEDIA
 // =========================================================================
 app.get('/api/plantillas', async (req, res) => {
     try {
@@ -430,15 +430,40 @@ app.get('/api/plantillas', async (req, res) => {
 
 app.post('/api/plantillas', async (req, res) => {
     try {
-        // Recibe: { nombre, icono, texto, tipoMedia, urlMedia }
-        const nuevaPlantilla = req.body;
-        nuevaPlantilla.timestamp = Date.now();
+        const { id, nombre, secuencia } = req.body;
         
-        const docRef = await coleccionPlantillas.add(nuevaPlantilla);
-        res.json({ success: true, id: docRef.id });
+        // 🚀 MAGIA: Usamos el ID generado (ej: info_de_cursos) como candado único del documento
+        await coleccionPlantillas.doc(id).set({
+            nombre: nombre,
+            secuencia: secuencia,
+            timestamp: Date.now()
+        });
+        
+        res.json({ success: true, id: id });
     } catch (error) {
         console.error("Error guardando plantilla:", error);
         res.status(500).json({ error: "Fallo al guardar plantilla" });
+    }
+});
+
+// 🚀 NUEVO ENDPOINT: Soporte nativo para videos
+app.post('/send-video', async (req, res) => {
+    const { numero, urlVideo, caption } = req.body;
+    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
+    try {
+        const jid = formatearJid(numero);
+        
+        await whatsappSock.sendPresenceUpdate('composing', jid);
+        await delay(Math.floor(Math.random() * 2000) + 3000); // Simula más peso de carga
+        
+        await whatsappSock.sendMessage(jid, { video: { url: urlVideo }, caption: caption });
+        await whatsappSock.sendPresenceUpdate('paused', jid);
+
+        await guardarMensajeBD(numero, "TrueWin", caption || "[Video enviado]", 'out'); 
+        res.json({ success: true });
+    } catch (error) {
+        console.error(`[Error] Fallo enviando video a ${numero}:`, error);
+        res.status(500).json({ error: error.message });
     }
 });
 
