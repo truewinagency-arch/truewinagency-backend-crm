@@ -207,29 +207,34 @@ async function connectToWhatsApp() {
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') return;
+        
+        // 🚀 ESCUDO ACTUALIZADO: Filtramos nulos, mensajes propios, estados y CANALES
+        if (
+            !msg.message || 
+            msg.key.fromMe || 
+            msg.key.remoteJid === 'status@broadcast' || 
+            msg.key.remoteJid.includes('@newsletter') // <-- EL CANDADO PARA CANALES
+        ) {
+            return;
+        }
         
         const remoteJid = msg.key.remoteJid;
         const esGrupo = remoteJid.endsWith('@g.us');
         
         let nombrePerfil = msg.pushName || "Usuario"; 
-        let remitenteEspecifico = null; // 🚀 Si es chat privado, se queda en null
+        let remitenteEspecifico = null; 
 
         if (esGrupo) {
-            // Extraemos el nombre de la persona que escribió dentro del grupo
             remitenteEspecifico = msg.pushName || msg.key.participant?.split('@')[0] || "Miembro";
             try {
                 const metadata = await whatsappSock.groupMetadata(remoteJid);
                 nombrePerfil = metadata.subject || "Grupo de WhatsApp";
-            } catch (error) {
-                nombrePerfil = "Grupo de WhatsApp";
-            }
+            } catch (error) {}
         }
         
         const identificador = remoteJid; 
         const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "[Multimedia/Sticker recibido]";
         
-        // 🚀 PASAMOS EL REMITENTE A LA BASE DE DATOS
         await guardarMensajeBD(identificador, nombrePerfil, texto, 'in', remitenteEspecifico);
 
         io.emit('nuevo-mensaje', { 
@@ -237,7 +242,7 @@ async function connectToWhatsApp() {
             nombre: nombrePerfil, 
             texto: texto, 
             hora: new Date().toISOString(),
-            remitente: remitenteEspecifico // 🚀 LO ENVIAMOS AL CRM EN TIEMPO REAL
+            remitente: remitenteEspecifico 
         });
     });
 
