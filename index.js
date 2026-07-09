@@ -446,15 +446,14 @@ app.post('/send-audio', async (req, res) => {
     }
 });
 
-app.get('/api/historial', async (req, res) => {
+app.get('/api/api/historial', async (req, res) => {
     try {
         const hostActivo = getHostNumber();
         if (hostActivo === 'desconectado') {
-            return res.json({ historial: {}, nombres: {} }); 
+            return res.json({ historial: {}, nombres: {}, fotos: {} }); 
         }
 
-        const snapshot = await coleccionMensajes.where('host', '==', hostActivo).get();
-        
+        const snapshot = await db.collection('crm_mensajes').where('host', '==', hostActivo).get();
         let todosLosMensajes = [];
         snapshot.forEach(doc => todosLosMensajes.push(doc.data()));
         
@@ -462,6 +461,7 @@ app.get('/api/historial', async (req, res) => {
 
         const historial = {};
         const nombres = {};
+        const fotos = {}; // 🚀 NUEVO ALMACÉN DE FOTOS
         
         todosLosMensajes.forEach(data => {
             if (!historial[data.numero]) historial[data.numero] = [];
@@ -470,14 +470,31 @@ app.get('/api/historial', async (req, res) => {
                 texto: data.texto, 
                 hora: data.hora,
                 remitente: data.remitente || null,
-                mediaUrl: data.mediaUrl || null,   // 🚀 PASADO AL FRONETND
-                mediaType: data.mediaType || null  // 🚀 PASADO AL FRONTEND
+                mediaUrl: data.mediaUrl || null,
+                mediaType: data.mediaType || null
             });
 
             if (data.tipo === 'in' && data.nombre) nombres[data.numero] = data.nombre;
         });
+
+        // 🚀 RESOLVER FOTOS EN TIEMPO REAL: Pedimos las fotos de perfil vigentes a Meta
+        if (whatsappSock) {
+            for (const jid of Object.keys(historial)) {
+                try {
+                    // El método profilePictureUrl de Baileys descarga la URL oficial (sirve para @s.whatsapp.net y @g.us)
+                    const urlFoto = await whatsappSock.profilePictureUrl(jid, 'image');
+                    if (urlFoto) {
+                        fotos[jid] = urlFoto;
+                    }
+                } catch (e) {
+                    // Si el usuario no tiene foto pública o falla, se queda vacía de forma segura
+                    fotos[jid] = null; 
+                }
+            }
+        }
         
-        res.json({ historial, nombres });
+        // Enviamos el paquete de fotos adjunto a la respuesta
+        res.json({ historial, nombres, fotos });
     } catch (error) {
         console.error("Error obteniendo historial:", error);
         res.status(500).json({ error: "Fallo al obtener historial" });
