@@ -425,6 +425,8 @@ app.get('/api/historial', async (req, res) => {
 });
 
 
+
+
 // =========================================================================
 // 5. GESTOR DE PLANTILLAS DINÁMICAS (SECUENCIAS) Y MULTIMEDIA
 // =========================================================================
@@ -455,6 +457,16 @@ app.post('/api/plantillas', async (req, res) => {
     } catch (error) {
         console.error("Error guardando plantilla:", error);
         res.status(500).json({ error: "Fallo al guardar plantilla" });
+    }
+});
+
+app.delete('/api/plantillas/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await coleccionPlantillas.doc(id).delete();
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: "Fallo al eliminar plantilla" });
     }
 });
 
