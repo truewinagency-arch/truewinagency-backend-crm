@@ -177,9 +177,10 @@ async function connectToWhatsApp() {
                             const value = data[type][id];
                             const docId = `${type}-${id}`;
                             
-                            // 🚀 FILTRO ANTI-BASURA DIGITAL: Bloqueamos metadatos inútiles de Baileys
-                            if (docId.includes('lid-mapping') || docId.includes('app-state-sync') || docId.includes('sender-key')) {
-                                continue; // Nos saltamos este ciclo, esto NO entra a la base de datos
+                            // 🚀 FILTRO ANTI-BASURA DIGITAL (CORREGIDO)
+                            // SOLO bloqueamos los lid-mapping. Las llaves de sincronización DEBEN guardarse.
+                            if (docId.includes('lid-mapping')) {
+                                continue; 
                             }
 
                             const docRef = coleccionSesion.doc(docId);
