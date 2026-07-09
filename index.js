@@ -204,6 +204,8 @@ async function connectToWhatsApp() {
     whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
+        syncFullHistory: false,              
+        shouldSyncHistoryMessage: () => false, 
         browser: ['Windows', 'Chrome', '111.0.0.0'], 
         logger: pino({ level: 'error' })
     });
@@ -315,41 +317,53 @@ async function connectToWhatsApp() {
         });
     });
 
-    whatsappSock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+ const { DisconnectReason } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom'); // Estabilizador de errores nativo
 
-        if (qr) {
-            ultimoQR = qr;
-            io.emit('qr-update', qr);
-            console.log('[TrueWin] 📲 Código QR generado con éxito. Listo para escanear en el CRM.');
+// =====================================================================
+// TU MANEJADOR DE CONEXIÓN OPTIMIZADO AL 100%
+// =====================================================================
+whatsappSock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect } = update;
+    
+    if (connection === 'close') {
+        // 🔍 Extracción ultra-segura del código de error nativo de Meta/Boom
+        const errorBoom = lastDisconnect?.error instanceof Boom ? lastDisconnect.error : null;
+        const codigoError = errorBoom ? errorBoom.output?.statusCode : (lastDisconnect?.error?.output?.statusCode || 500);
+        const razonError = errorBoom ? errorBoom.message : (lastDisconnect?.error?.message || 'Error desconocido de socket');
+        
+        console.log(`[TrueWin] Conexión cerrada. Código extraído: ${codigoError}. Razón: ${razonError}`);
+
+        // 🚨 CANDADO 1: Evita peleas de servidores en Render (Choque de contenedores)
+        if (codigoError === 440 || codigoError === DisconnectReason.restartRequired || (razonError && razonError.includes('conflict'))) {
+            console.error("[🚨 Choque de Instancias] Se detectó otra sesión activa de este bot en la nube o reinicio forzado. Deteniendo reconexión para salvar la línea.");
+            return; // Detiene el bucle por completo. Evita el baneo por suplantación.
         }
 
-        if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log(`[TrueWin] Conexión cerrada (Código: ${statusCode}). ¿Reconectando?: ${shouldReconnect}`);
-            io.emit('estado-conexion', 'desconectado');
-
-            if (whatsappSock) {
-                try { whatsappSock.ev.removeAllListeners(); } catch (e) {}
-                whatsappSock = null;
-            }
-
-            if (shouldReconnect) {
-                console.log('[TrueWin] Reiniciando flujo de socket de forma limpia en 3 segundos...');
-                setTimeout(() => { connectToWhatsApp(); }, 3000);
-            } else {
-                console.log('[TrueWin] Sesión desvinculada voluntariamente.');
-                ultimoQR = null;
-            }
-        } else if (connection === 'open') {
-            console.log('[TrueWin] ¡CONEXIÓN GLOBAL CONFIGURADA EN LA NUBE CON FIRESTORE!');
-            ultimoQR = null;
-            io.emit('estado-conexion', 'conectado');
+        // 🚨 CANDADO 2: Freno de emergencia por baneo o sesión revocada de Meta
+        if (codigoError === 403 || codigoError === DisconnectReason.forbidden) {
+            console.error("[🚨 ALERTA MÁXIMA - CÓDIGO 403] Los servidores de Meta rechazaron la autenticación (Línea suspendida o credenciales revocadas). DETENIENDO RECONEXIÓN AUTOMÁTICA.");
+            return; // Detiene por completo la ráfaga letal de intentos cada 3 segundos.
         }
-    });
 
-    whatsappSock.ev.on('creds.update', saveCreds);
+        // 🚨 CANDADO 3: Desconexión voluntaria / Cierre de sesión desde el teléfono
+        if (codigoError === DisconnectReason.loggedOut) {
+            console.error("[🚨 Sesión Cerrada] El usuario desvinculó el bot desde los ajustes de WhatsApp del teléfono. Deteniendo reconexión.");
+            return; // No intentes reconectar si tú mismo desvinculaste el código QR.
+        }
+
+        // Reconexión normal únicamente para caídas de internet, fallas comunes de red o timeouts (Códigos 408, 503, etc.)
+        console.log(`[TrueWin] Desconexión común detectada (${codigoError}). Intentando reconexión segura en 3 segundos...`);
+        setTimeout(() => iniciarConexionEnVivo(), 3000); 
+    }
+    
+    // Si la conexión se abre con éxito, limpiamos cualquier rastro
+    if (connection === 'open') {
+        console.log('[TrueWin] ¡CONEXIÓN GLOBAL ESTABLECIDA CON ÉXITO EN WHATSAPP!');
+    }
+});
+
+whatsappSock.ev.on('creds.update', saveCreds);
 }
 
 io.on('connection', (socket) => {
