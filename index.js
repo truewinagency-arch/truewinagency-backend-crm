@@ -404,7 +404,7 @@ app.post('/send-text', async (req, res) => {
                         body: "Truezone Agency",
                         sourceUrl: urlDetectada,
                         mediaType: 1,
-                        renderLargerThumbnail: true
+                        showAdAttribution: true
                     }
                 }
             });
@@ -769,28 +769,26 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
 
             // Disparo nativo vía Baileys según la morfología de la secuencia
            if (msj.tipo === 'texto') {
-                // 🚀 ESCÁNER DE ENLACES: Busca si el texto contiene alguna URL
                 const urls = msj.texto.match(/(https?:\/\/[^\s]+)/g);
                 
                 if (urls && urls.length > 0) {
                     const urlDetectada = urls[0];
                     const esGrupo = urlDetectada.includes('chat.whatsapp.com');
 
-                    // 🚀 TARJETA INTERACTIVA DE ALTA CONVERSIÓN
+                    // 🚀 CÓDIGO BLINDADO: Sin imágenes gigantes que congelen el servidor
                     await whatsappSock.sendMessage(numeroDestino, { 
                         text: msj.texto,
                         contextInfo: {
                             externalAdReply: {
                                 title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Toca aquí para abrir el enlace",
-                                body: "Truezone Agency", // Firma de la agencia
-                                sourceUrl: urlDetectada, // Hacia donde lleva el clic
-                                mediaType: 1, // Tipo de renderizado de tarjeta
-                                renderLargerThumbnail: true
+                                body: "Truezone Agency",
+                                sourceUrl: urlDetectada,
+                                mediaType: 1,
+                                showAdAttribution: true // Añade un ícono/estilo especial de oficial
                             }
                         }
                     });
                 } else {
-                    // Si no trae enlaces, se envía como texto plano normal
                     await whatsappSock.sendMessage(numeroDestino, { text: msj.texto });
                 }
             } else if (msj.tipo === 'media' && msj.url) {
