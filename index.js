@@ -100,6 +100,7 @@ app.use(express.json());
 
 let whatsappSock = null;
 let ultimoQR = null;
+let ultimosMensajesKey = {};
 
 // =========================================================================
 // 3. CONEXIÓN A WHATSAPP CON CACHÉ EN RAM + LOTES EN FIRESTORE
@@ -236,6 +237,7 @@ async function connectToWhatsApp() {
         }
         
         const identificador = remoteJid; 
+        ultimosMensajesKey[identificador] = msg.key;
         
         // 🚀 MOTOR DE TRADUCCIÓN MULTIMEDIA ENTRANTE
         const messageType = Object.keys(msg.message || {})[0];
@@ -488,6 +490,25 @@ app.get('/api/historial', async (req, res) => {
     } catch (error) {
         console.error("Error obteniendo historial:", error);
         res.status(500).json({ error: "Fallo al obtener historial" });
+    }
+});
+
+// 🚀 ENDPOINT: Activa el doble check azul en el teléfono del cliente
+app.post('/api/marcar-visto', async (req, res) => {
+    const { numero } = req.body;
+    if (!whatsappSock || !numero) return res.json({ success: false });
+    
+    try {
+        if (ultimosMensajesKey[numero]) {
+            // Enviamos el recibo de lectura oficial a los servidores de Meta
+            await whatsappSock.readMessages([ultimosMensajesKey[numero]]);
+            res.json({ success: true });
+        } else {
+            res.json({ success: true, message: "Sin mensajes pendientes en caché" });
+        }
+    } catch (e) {
+        console.error("Error al marcar visto:", e);
+        res.status(500).json({ error: e.message });
     }
 });
 
