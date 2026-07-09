@@ -37,19 +37,21 @@ function getHostNumber() {
     return 'desconectado';
 }
 
-// 🚀 FUNCIÓN MAESTRA: Guarda cada disparo en la base de datos
-async function guardarMensajeBD(numero, nombre, texto, tipo, remitente = null) {
+// 🚀 FUNCIÓN MAESTRA: Guarda cada disparo con soporte multimedia integral
+async function guardarMensajeBD(numero, nombre, texto, tipo, remitente = null, mediaUrl = null, mediaType = null) {
     try {
         const hostActual = getHostNumber(); 
         if (hostActual === 'desconectado') return; 
 
-        await coleccionMensajes.add({
+        await db.collection('crm_mensajes').add({
             host: hostActual, 
             numero: numero,
             nombre: nombre || "Desconocido",
             texto: texto,
             tipo: tipo,
-            remitente: remitente, // 🚀 NUEVO: Almacena quién escribió dentro del grupo
+            remitente: remitente,
+            mediaUrl: mediaUrl,   // 🚀 NUEVO
+            mediaType: mediaType, // 🚀 NUEVO
             hora: new Date().toISOString(),
             timestamp: Date.now() 
         });
@@ -207,13 +209,11 @@ async function connectToWhatsApp() {
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
-        
-        // 🚀 ESCUDO ACTUALIZADO: Filtramos nulos, mensajes propios, estados y CANALES
         if (
             !msg.message || 
             msg.key.fromMe || 
             msg.key.remoteJid === 'status@broadcast' || 
-            msg.key.remoteJid.includes('@newsletter') // <-- EL CANDADO PARA CANALES
+            msg.key.remoteJid.includes('@newsletter')
         ) {
             return;
         }
@@ -233,16 +233,74 @@ async function connectToWhatsApp() {
         }
         
         const identificador = remoteJid; 
-        const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "[Multimedia/Sticker recibido]";
         
-        await guardarMensajeBD(identificador, nombrePerfil, texto, 'in', remitenteEspecifico);
+        // 🚀 MOTOR DE TRADUCCIÓN MULTIMEDIA ENTRANTE
+        const messageType = Object.keys(msg.message || {})[0];
+        let texto = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
+        let mediaUrl = null;
+        let mediaType = null;
+
+        if (messageType === 'imageMessage') {
+            mediaType = 'image';
+            texto = msg.message.imageMessage.caption || "[Imagen recibida]";
+        } else if (messageType === 'videoMessage') {
+            mediaType = 'video';
+            texto = msg.message.videoMessage.caption || "[Video recibido]";
+        } else if (messageType === 'audioMessage') {
+            mediaType = 'audio';
+            texto = "[Audio/Nota de voz recibida]";
+        } else if (!texto) {
+            texto = "[Archivo o mensaje interactivo recibido]";
+        }
+
+        // Si se detectó multimedia, lo descargamos del servidor de Meta y lo subimos a tu Storage
+        if (mediaType) {
+            try {
+                const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+                const buffer = await downloadMediaMessage(msg, 'buffer', {}, { 
+                    logger: pino({ level: 'error' }) 
+                });
+                
+                if (buffer) {
+                    const crypto = require('crypto');
+                    const token = crypto.randomUUID(); // Token criptográfico nativo de Firebase
+                    let extension = 'bin';
+                    let contentType = 'application/octet-stream';
+                    
+                    if (mediaType === 'image') { extension = 'png'; contentType = 'image/png'; }
+                    else if (mediaType === 'video') { extension = 'mp4'; contentType = 'video/mp4'; }
+                    else if (mediaType === 'audio') { extension = 'ogg'; contentType = 'audio/ogg; codecs=opus'; }
+
+                    const nombreArchivo = `crm_incoming/${identificador.replace(/[^a-zA-Z0-9]/g, '')}_${Date.now()}.${extension}`;
+                    const { getStorage } = require('firebase-admin/storage');
+                    const bucket = getStorage().bucket('truezone-agency.firebasestorage.app');
+                    const archivoBlob = bucket.file(nombreArchivo);
+                    
+                    await archivoBlob.save(buffer, {
+                        metadata: {
+                            metadata: { firebaseStorageDownloadTokens: token }
+                        },
+                        contentType: contentType
+                    });
+                    
+                    // Armamos la URL pública con el formato nativo compatible con el visualizador del frontend
+                    mediaUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(nombreArchivo)}?alt=media&token=${token}`;
+                }
+            } catch (err) {
+                console.error("Error procesando o subiendo multimedia entrante de WhatsApp:", err);
+            }
+        }
+        
+        await guardarMensajeBD(identificador, nombrePerfil, texto, 'in', remitenteEspecifico, mediaUrl, mediaType);
 
         io.emit('nuevo-mensaje', { 
             numero: identificador, 
             nombre: nombrePerfil, 
             texto: texto, 
             hora: new Date().toISOString(),
-            remitente: remitenteEspecifico 
+            remitente: remitenteEspecifico,
+            mediaUrl: mediaUrl, // 🚀 ENVIADO EN VIVO A LA WEB
+            mediaType: mediaType
         });
     });
 
@@ -348,7 +406,7 @@ app.post('/send-image', async (req, res) => {
         await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: caption });
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        await guardarMensajeBD(numero, "TrueWin", caption || "[Imagen enviada]", 'out'); 
+        await guardarMensajeBD(numero, "TrueWin", caption || "[Imagen enviada]", 'out', null, urlImagen, 'image');
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando imagen a ${numero}:`, error);
@@ -380,7 +438,7 @@ app.post('/send-audio', async (req, res) => {
 
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        await guardarMensajeBD(numero, "TrueWin", "[Audio enviado]", 'out'); 
+        await guardarMensajeBD(numero, "TrueWin", "[Nota de voz enviada]", 'out', null, urlAudio, 'audio');
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando audio a ${numero}:`, error);
@@ -411,7 +469,9 @@ app.get('/api/historial', async (req, res) => {
                 tipo: data.tipo, 
                 texto: data.texto, 
                 hora: data.hora,
-                remitente: data.remitente || null // 🚀 LE ENTREGAMOS EL REMITENTE A LA WEB
+                remitente: data.remitente || null,
+                mediaUrl: data.mediaUrl || null,   // 🚀 PASADO AL FRONETND
+                mediaType: data.mediaType || null  // 🚀 PASADO AL FRONTEND
             });
 
             if (data.tipo === 'in' && data.nombre) nombres[data.numero] = data.nombre;
@@ -483,7 +543,7 @@ app.post('/send-video', async (req, res) => {
         await whatsappSock.sendMessage(jid, { video: { url: urlVideo }, caption: caption });
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        await guardarMensajeBD(numero, "TrueWin", caption || "[Video enviado]", 'out'); 
+        await guardarMensajeBD(numero, "TrueWin", caption || "[Video enviado]", 'out', null, urlVideo, 'video');
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando video a ${numero}:`, error);
