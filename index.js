@@ -671,25 +671,52 @@ async function procesarBotEnNube(numeroCliente, textoMensaje) {
             if (auto.condicion === 'contiene' && textoLimpio.includes(keyword)) haceMatch = true;
 
             if (haceMatch) {
-                console.log(`[🤖 Bot en Nube] MATCH con "${keyword}". Activando visto y secuencia...`);
                 
-                // 1. 🚀 EL CANDADO ANTI-BAN: Marcamos como leído en la nube antes de mandar el flujo
+                // 1. 🚀 EL CANDADO DE FRECUENCIA INTELIGENTE
+                if (auto.frecuencia === 'unica') {
+                    // Creamos una firma limpia eliminando caracteres técnicos del JID (ej: auto_12345_584123456789)
+                    const idLogUnico = `${auto.id}_${numeroCliente.replace(/[^a-zA-Z0-9]/g, '')}`;
+                    
+                    // Verificamos si este cliente específico ya quemó esta regla en el pasado
+                    const registroDoc = await db.collection('crm_registro_bot').doc(idLogUnico).get();
+                    
+                    if (registroDoc.exists) {
+                        console.log(`[🤖 Bot Protegido] El cliente ${numeroCliente} ya recibió la regla ÚNICA "${keyword}" anteriormente. Omitiendo despacho.`);
+                        break; // Rompemos el ciclo de forma segura sin enviar nada
+                    }
+                    
+                    // Si no existe el registro, lo creamos de inmediato en la base de datos para congelar futuros intentos
+                    await db.collection('crm_registro_bot').doc(idLogUnico).set({
+                        idAutomatizacion: auto.id,
+                        palabraClave: auto.palabraClave,
+                        numeroCliente: numeroCliente,
+                        ejecutadoEl: new Date().toISOString()
+                    });
+                }
+
+                console.log(`[🤖 Bot en Nube] Ejecución autorizada para "${keyword}". Despachando secuencia...`);
+                
+                // 2. Ejecutar visto automático anti-ban
                 if (ultimosMensajesKey[numeroCliente]) {
                     try {
                         await whatsappSock.readMessages([ultimosMensajesKey[numeroCliente]]);
-                        console.log(`[Anti-Ban] Doble check azul enviado al cliente de forma autónoma.`);
-                    } catch (e) { console.warn("No se pudo marcar visto en la nube:", e.message); }
+                    } catch (e) { console.warn("Fallo al marcar visto autonomo:", e.message); }
                 }
 
-                // 2. Traer plantilla y despachar
+                // 3. Cargar secuencia y disparar ráfaga asíncrona
                 const tplDoc = await db.collection('crm_plantillas').doc(auto.idPlantilla).get();
-                if (!tplDoc.exists) break;
+                if (!tplDoc.exists) {
+                    console.error(`La plantilla ${auto.idPlantilla} no existe en Firestore.`);
+                    break;
+                }
                 
                 despacharFlujoDesdeNube(numeroCliente, tplDoc.data());
                 break; 
             }
         }
-    } catch (err) { console.error(err); }
+    } catch (err) {
+        console.error("Error en el validador de frecuencia en la nube:", err);
+    }
 }
 
 // 🚀 DESPACHADOR ASÍNCRONO EN NUBE: Ejecuta secuencias con pausas humanas anti-ban
@@ -710,6 +737,21 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 textoBurbuja = "[Nota de voz enviada]";
             }
 
+            // 🚀 TELEMETRÍA HUMANA AUTOMÁTICA: Activamos "Escribiendo..." o "Grabando audio..." antes del disparo
+            try {
+                if (msj.tipo === 'audio') {
+                    // Le avisa a WhatsApp que el robot está grabando una nota de voz
+                    await whatsappSock.sendPresenceUpdate('recording', numeroDestino);
+                    await pause(3500); // Sostiene el "Grabando audio..." por 3.5 segundos para simular realismo
+                } else {
+                    // Le avisa a WhatsApp que el robot está escribiendo texto
+                    await whatsappSock.sendPresenceUpdate('composing', numeroDestino);
+                    await pause(2000); // Sostiene el "Escribiendo..." por 2 segundos simulación de tipeo
+                }
+            } catch (e) { 
+                console.warn("No se pudo actualizar la telemetría de presencia en la nube:", e.message); 
+            }
+
             // Disparo nativo vía Baileys según la morfología de la secuencia
             if (msj.tipo === 'texto') {
                 await whatsappSock.sendMessage(numeroDestino, { text: msj.texto });
@@ -722,6 +764,11 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             } else if (msj.tipo === 'audio' && msj.url) {
                 await whatsappSock.sendMessage(numeroDestino, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
             }
+
+            // 🚀 APAGAR ESTADO: Le avisamos a Meta que el operador dejó de interactuar en este bloque
+            try {
+                await whatsappSock.sendPresenceUpdate('paused', numeroDestino);
+            } catch (e) {}
 
             // Guardamos en el historial global de Firestore
             await guardarMensajeBD(numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
@@ -738,7 +785,7 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 tipo: 'out'
             });
 
-            // Delay inteligente calculado en caliente en la nube (2.5s a 5.5s)
+            // Delay inteligente calculado en caliente en la nube entre mensajes (2.5s a 5.5s)
             const delayHumano = Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500;
             await pause(delayHumano);
             
