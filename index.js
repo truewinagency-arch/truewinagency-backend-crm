@@ -26,10 +26,10 @@ const db = getFirestore();
 db.settings({ ignoreUndefinedProperties: true });
 const coleccionSesion = db.collection('whatsapp_session');
 
-// 🚀 NUEVA COLECCIÓN: Cerebro de mensajes
+// 🚀 COLECCIÓN: Cerebro de mensajes
 const coleccionMensajes = db.collection('mensajes_crm');
 
-// 🚀 NUEVO: Detector del número conectado actualmente al servidor
+// 🚀 DETECTOR DEL NÚMERO CONECTADO ACTUALMENTE AL SERVIDOR
 function getHostNumber() {
     if (whatsappSock && whatsappSock.user && whatsappSock.user.id) {
         // Baileys guarda el número así: "584121234567:1@s.whatsapp.net". Esto lo limpia.
@@ -41,13 +41,12 @@ function getHostNumber() {
 // 🚀 FUNCIÓN MAESTRA: Guarda cada disparo en la base de datos
 async function guardarMensajeBD(numero, nombre, texto, tipo) {
     try {
-        const hostActual = getHostNumber(); // Sabemos de quién es este mensaje
+        const hostActual = getHostNumber(); 
         
-        // Si no hay host, no guardamos para evitar datos corruptos
         if (hostActual === 'desconectado') return; 
 
         await coleccionMensajes.add({
-            host: hostActual, // <-- EL CANDADO DE AISLAMIENTO
+            host: hostActual, 
             numero: numero,
             nombre: nombre || "Desconocido",
             texto: texto,
@@ -59,6 +58,15 @@ async function guardarMensajeBD(numero, nombre, texto, tipo) {
         console.error("Error guardando en historial:", error);
     }
 }
+
+// 🚀 ENRUTADOR INTELIGENTE: Detecta si es un Grupo, un @lid o Persona normal sin romper formatos
+function formatearJid(numero) {
+    const numStr = numero.toString();
+    if (numStr.includes('@g.us')) return numStr; 
+    if (numStr.includes('@lid')) return numStr;  
+    return `${numStr.replace(/[^0-9]/g, '')}@s.whatsapp.net`; 
+}
+
 // =========================================================================
 // 2. CONFIGURACIÓN DEL SERVIDOR HTTP Y WEBSOCKETS
 // =========================================================================
@@ -194,7 +202,6 @@ async function connectToWhatsApp() {
     whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        // 🚀 CAMUFLAJE 1: Nos hacemos pasar por una PC normal usando Chrome o Edge
         browser: ['Windows', 'Chrome', '111.0.0.0'], 
         logger: pino({ level: 'error' })
     });
@@ -206,20 +213,17 @@ async function connectToWhatsApp() {
         const remoteJid = msg.key.remoteJid;
         const esGrupo = remoteJid.endsWith('@g.us');
         
-        // 🚀 MAGIA PARA GRUPOS: Obtenemos el título del grupo
         let nombrePerfil = msg.pushName || "Usuario"; 
         if (esGrupo) {
             try {
                 const metadata = await whatsappSock.groupMetadata(remoteJid);
                 nombrePerfil = metadata.subject || "Grupo de WhatsApp";
             } catch (error) {
-                // Falla silenciosa si no logramos descargar el nombre a tiempo
+                // Falla silenciosa si no logra resolver metadatos inmediatamente
             }
         }
         
-        // Mantenemos las etiquetas @lid y @g.us para que el sistema las reconozca luego
-        const identificador = remoteJid.replace('@s.whatsapp.net', ''); 
-
+        const identificador = remoteJid; 
         const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "[Multimedia/Sticker recibido]";
         
         await guardarMensajeBD(identificador, nombrePerfil, texto, 'in');
@@ -272,7 +276,6 @@ async function connectToWhatsApp() {
 io.on('connection', (socket) => {
     console.log('[Socket.IO] ¡Nueva pestaña del CRM sincronizada al túnel en tiempo real!');
     
-    // 1. Mantenemos el reporte de estado automático al conectar la pestaña
     if (whatsappSock && whatsappSock.user) {
         socket.emit('estado-conexion', 'conectado');
     } else if (ultimoQR) {
@@ -282,25 +285,17 @@ io.on('connection', (socket) => {
         socket.emit('estado-conexion', 'desconectado');
     }
 
-    // 🚀 NUEVO: Escucha el tecleo manual en tiempo real desde el CRM y lo inyecta a WhatsApp
     socket.on('crm-presencia', async ({ numero, estado }) => {
         if (!whatsappSock) return;
         try {
-            const jid = formatearJid(numero); // 🚀 Usamos el enrutador
+            const jid = formatearJid(numero);
             await whatsappSock.sendPresenceUpdate(estado, jid);
         } catch (e) {}
     });
-
-// 🚀 NUEVO ENRUTADOR INTELIGENTE: Detecta Grupos, LIDs y Personas
-function formatearJid(numero) {
-    const numStr = numero.toString();
-    if (numStr.includes('@g.us')) return numStr; // Es grupo (conserva sus guiones)
-    if (numStr.includes('@lid')) return numStr;  // Es identidad oculta
-    return `${numStr.replace(/[^0-9]/g, '')}@s.whatsapp.net`; // Es persona normal
-}
+});
 
 // =========================================================================
-// 4. ENDPOINTS DE CONTROL (ACTUALIZADOS PARA SOPORTAR @lid Y @s.whatsapp.net)
+// 4. ENDPOINTS DE CONTROL (BLINDADOS ANTI-BANEO Y SOPORTE DE GRUPOS / LIDS)
 // =========================================================================
 app.get('/status', (req, res) => {
     if (whatsappSock && whatsappSock.user) {
@@ -309,16 +304,13 @@ app.get('/status', (req, res) => {
     res.json({ status: "disconnected", qr: ultimoQR });
 });
 
-
-
-
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
-        const jid = formatearJid(numero); // 🚀 Usamos el enrutador
+        const jid = formatearJid(numero);
         
         await whatsappSock.sendPresenceUpdate('composing', jid);
         await delay(Math.floor(Math.random() * 2000) + 2500); 
@@ -338,20 +330,15 @@ app.post('/send-image', async (req, res) => {
     const { numero, urlImagen, caption } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
-        const esLid = numero.toString().includes('lid');
-        const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
-        const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
+        const jid = formatearJid(numero);
         
-        // 🚀 CAMUFLAJE 2: Simulamos que estamos adjuntando un archivo imitando el retraso de subida
         await whatsappSock.sendPresenceUpdate('composing', jid);
         await delay(Math.floor(Math.random() * 1500) + 2000); 
         
         await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: caption });
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        // Corregido: Guardamos la etiqueta del archivo multimedia enviado
         await guardarMensajeBD(numero, "TrueWin", caption || "[Imagen enviada]", 'out'); 
-
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando imagen a ${numero}:`, error);
@@ -363,20 +350,14 @@ app.post('/send-audio', async (req, res) => {
     const { numero, urlAudio } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
-        const esLid = numero.toString().includes('lid');
-        const numeroLimpio = numero.toString().replace(/[^0-9]/g, '');
-        const jid = esLid ? `${numeroLimpio}@lid` : `${numeroLimpio}@s.whatsapp.net`;
+        const jid = formatearJid(numero);
         
-        // 🚀 CAMUFLAJE 3: Mostramos de forma legítima "Grabando audio..." antes de soltar el PTT
         await whatsappSock.sendPresenceUpdate('recording', jid);
-        
-        // Hacemos que simule estar grabando durante 4 segundos enteros
         await delay(4000); 
         
         await whatsappSock.sendMessage(jid, { audio: { url: urlAudio }, mimetype: 'audio/mp4', ptt: true });
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        // Corregido: Guardamos el registro en Firebase
         await guardarMensajeBD(numero, "TrueWin", "[Nota de voz enviada]", 'out'); 
         res.json({ success: true });
     } catch (error) {
@@ -384,28 +365,24 @@ app.post('/send-audio', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
 app.get('/api/historial', async (req, res) => {
     try {
         const hostActivo = getHostNumber();
-        
-        // Si no has escaneado el QR, devolvemos un historial vacío
         if (hostActivo === 'desconectado') {
             return res.json({ historial: {}, nombres: {} }); 
         }
 
-        // 1. Buscamos SOLO los mensajes que le pertenecen a TU número conectado
         const snapshot = await coleccionMensajes.where('host', '==', hostActivo).get();
         
         let todosLosMensajes = [];
         snapshot.forEach(doc => todosLosMensajes.push(doc.data()));
         
-        // 2. Ordenamos por fecha en la memoria del servidor
         todosLosMensajes.sort((a, b) => a.timestamp - b.timestamp);
 
         const historial = {};
         const nombres = {};
         
-        // 3. Empaquetamos la respuesta
         todosLosMensajes.forEach(data => {
             if (!historial[data.numero]) historial[data.numero] = [];
             historial[data.numero].push({ tipo: data.tipo, texto: data.texto, hora: data.hora });
