@@ -209,18 +209,21 @@ async function connectToWhatsApp() {
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
-        if (
-            !msg.message || 
-            msg.key.fromMe || 
-            msg.key.remoteJid === 'status@broadcast' || 
-            msg.key.remoteJid.includes('@newsletter')
-        ) {
+        if (!msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast' || msg.key.remoteJid.includes('@newsletter')) {
             return;
         }
-        
+
+        // 🚀 CANDADO ANTI-BLOQUEO: Filtra y destruye la sincronización histórica masiva
+        const tiempoActualUnix = Math.floor(Date.now() / 1000);
+        if (msg.messageTimestamp && (tiempoActualUnix - msg.messageTimestamp) > 60) {
+            // Si el mensaje tiene más de 60 segundos de haber sido enviado en el pasado, 
+            // significa que es parte del historial viejo de WhatsApp y lo ignoramos.
+            console.log(`[Sincronización] Ignorando mensaje antiguo del JID: ${msg.key.remoteJid}`);
+            return;
+        }
+
         const remoteJid = msg.key.remoteJid;
         const esGrupo = remoteJid.endsWith('@g.us');
-        
         let nombrePerfil = msg.pushName || "Usuario"; 
         let remitenteEspecifico = null; 
 
