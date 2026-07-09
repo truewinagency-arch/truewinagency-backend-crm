@@ -769,29 +769,9 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
 
             // Disparo nativo vía Baileys según la morfología de la secuencia
            if (msj.tipo === 'texto') {
-                const urls = msj.texto.match(/(https?:\/\/[^\s]+)/g);
+                // Envío directo de texto sin forzar metadatos para garantizar el 100% de entrega
+                await whatsappSock.sendMessage(numeroDestino, { text: msj.texto });
                 
-                if (urls && urls.length > 0) {
-                    const urlDetectada = urls[0];
-                    const esGrupo = urlDetectada.includes('chat.whatsapp.com');
-
-                    // 🚀 CANDADO DE SEGURIDAD: Inyectamos thumbnailUrl para evitar el cuelgue
-                    await whatsappSock.sendMessage(numeroDestino, { 
-                        text: msj.texto,
-                        contextInfo: {
-                            externalAdReply: {
-                                title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Toca aquí para abrir el enlace",
-                                body: "Truezone Agency",
-                                sourceUrl: urlDetectada,
-                                thumbnailUrl: "https://i.imgur.com/jM8A80e.jpg", // 🚀 Imagen por defecto (Negro/Dorado) que destraba la Promesa
-                                mediaType: 1,
-                                showAdAttribution: true
-                            }
-                        }
-                    });
-                } else {
-                    await whatsappSock.sendMessage(numeroDestino, { text: msj.texto });
-                }
             } else if (msj.tipo === 'media' && msj.url) {
                 if (mType === 'video') {
                     await whatsappSock.sendMessage(numeroDestino, { video: { url: msj.url }, caption: msj.texto });
