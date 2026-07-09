@@ -224,10 +224,69 @@ async function connectToWhatsApp() {
     whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        syncFullHistory: false,              
-        shouldSyncHistoryMessage: () => false, 
-        browser: ['Windows', 'Chrome', '111.0.0.0'], 
+        
+        // 🚀 1. DEJAMOS QUE META SINCRONICE (Eliminamos los bloqueos falsos)
+        // Ya no usamos syncFullHistory: false. Dejamos que valide nuestra sesión al 100%.
+        
+        // 🚀 2. FIRMA NATIVA: Eliminamos el 'browser' custom para usar la huella original de Baileys
+        
+        // 🚀 3. PARCHE DE REINTENTOS (Evita que los mensajes mueran en el aire)
+        getMessage: async (key) => {
+            return { conversation: 'TrueWin' };
+        },
         logger: pino({ level: 'error' })
+    });
+
+    const { DisconnectReason } = require('@whiskeysockets/baileys');
+    const { Boom } = require('@hapi/boom'); 
+
+    whatsappSock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update; 
+        
+        if (qr) {
+            console.log("[TrueWin] Nuevo código QR generado. Enviando a la web...");
+            ultimoQR = qr;
+            io.emit('qr-update', qr);
+        }
+
+        if (connection === 'close') {
+            const errorBoom = lastDisconnect?.error instanceof Boom ? lastDisconnect.error : null;
+            const codigoError = errorBoom ? errorBoom.output?.statusCode : (lastDisconnect?.error?.output?.statusCode || 500);
+            const razonError = errorBoom ? errorBoom.message : (lastDisconnect?.error?.message || 'Error desconocido');
+            
+            console.log(`[TrueWin] Conexión cerrada. Código extraído: ${codigoError}. Razón: ${razonError}`);
+
+            if (codigoError === 440 || (razonError && razonError.includes('conflict'))) {
+                console.error("[🚨 Choque de Instancias] Se detectó otra sesión. Deteniendo reconexión.");
+                return; 
+            }
+
+            if (codigoError === 403 || codigoError === DisconnectReason.forbidden) {
+                console.error("[🚨 ALERTA 403] Servidores de Meta rechazaron autenticación. DETENIENDO.");
+                return; 
+            }
+
+            if (codigoError === DisconnectReason.loggedOut) {
+                console.error("[🚨 Sesión Cerrada] Usuario desvinculó el bot. Deteniendo reconexión.");
+                return; 
+            }
+
+            console.log(`[TrueWin] Reiniciando flujo de forma limpia en 3 segundos (Código: ${codigoError})...`);
+            
+            // 🚀 4. DESTRUCTOR DE ZOMBIES: Matamos el socket viejo antes de crear el nuevo
+            if (whatsappSock) {
+                whatsappSock.ev.removeAllListeners();
+            }
+
+            setTimeout(() => connectToWhatsApp(), 3000); 
+        }
+        
+        if (connection === 'open') {
+            console.log('[TrueWin] ¡CONEXIÓN GLOBAL ESTABLECIDA CON ÉXITO EN WHATSAPP!');
+            ultimoQR = null; 
+            // 🚀 5. CORRECCIÓN DEL CRM: Avisamos a tu web en vivo para que NO tengas que refrescar
+            io.emit('estado-conexion', 'conectado'); 
+        }
     });
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
@@ -337,60 +396,7 @@ async function connectToWhatsApp() {
         });
     });
 
- const { DisconnectReason } = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom'); // Estabilizador de errores nativo
-
-// =====================================================================
-// TU MANEJADOR DE CONEXIÓN OPTIMIZADO AL 100%
-// =====================================================================
-whatsappSock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update; 
-    
-    if (qr) {
-        console.log("[TrueWin] Nuevo código QR generado. Enviando a la web...");
-        ultimoQR = qr;
-        io.emit('qr-update', qr);
-    }
-
-    if (connection === 'close') {
-        const errorBoom = lastDisconnect?.error instanceof Boom ? lastDisconnect.error : null;
-        const codigoError = errorBoom ? errorBoom.output?.statusCode : (lastDisconnect?.error?.output?.statusCode || 500);
-        const razonError = errorBoom ? errorBoom.message : (lastDisconnect?.error?.message || 'Error desconocido de socket');
-        
-        console.log(`[TrueWin] Conexión cerrada. Código extraído: ${codigoError}. Razón: ${razonError}`);
-
-        // 🚨 CANDADO 1: Evita peleas reales de servidores en Render (Conflictos de sesión)
-        // 🚀 NOTA: Sacamos el 'restartRequired' de aquí. El 515 NO es un choque de instancias.
-        if (codigoError === 440 || (razonError && razonError.includes('conflict'))) {
-            console.error("[🚨 Choque de Instancias] Se detectó otra sesión activa real de este bot en la nube. Deteniendo reconexión.");
-            return; 
-        }
-
-        // 🚨 CANDADO 2: Freno de emergencia por baneo o sesión rechazada de Meta
-        if (codigoError === 403 || codigoError === DisconnectReason.forbidden) {
-            console.error("[🚨 ALERTA MÁXIMA - CÓDIGO 403] Los servidores de Meta rechazaron la autenticación. DETENIENDO RECONEXIÓN.");
-            return; 
-        }
-
-        // 🚨 CANDADO 3: Desconexión voluntaria desde los ajustes del teléfono
-        if (codigoError === DisconnectReason.loggedOut) {
-            console.error("[🚨 Sesión Cerrada] El usuario desvinculó el bot desde el teléfono. Deteniendo reconexión.");
-            return; 
-        }
-
-        // 🚀 RECONEXIÓN AUTOMÁTICA NORMAL (Aquí cae el 515 de forma segura)
-        // Cuando WhatsApp pida un reinicio de flujo, el bot esperará 3 segundos y levantará el canal limpio
-        console.log(`[TrueWin] Reiniciando flujo de forma limpia en 3 segundos (Código: ${codigoError})...`);
-        
-        // 🚀 CORREGIDO: Llamamos a la función correcta del backend
-        setTimeout(() => connectToWhatsApp(), 3000); 
-    }
-    
-    if (connection === 'open') {
-        console.log('[TrueWin] ¡CONEXIÓN GLOBAL ESTABLECIDA CON ÉXITO EN WHATSAPP!');
-        ultimoQR = null; // Limpiamos el caché del QR al conectar exitosamente
-    }
-});
+ 
 
 whatsappSock.ev.on('creds.update', saveCreds);
 }
