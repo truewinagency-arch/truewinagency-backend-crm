@@ -338,14 +338,12 @@ const { Boom } = require('@hapi/boom'); // Estabilizador de errores nativo
 // TU MANEJADOR DE CONEXIÓN OPTIMIZADO AL 100%
 // =====================================================================
 whatsappSock.ev.on('connection.update', async (update) => {
-    // 🚀 1. EXTRAEMOS LA VARIABLE 'qr' DE LA ACTUALIZACIÓN
     const { connection, lastDisconnect, qr } = update; 
     
-    // 🚀 2. CAPTURADOR DE QR: Si Meta nos manda un QR, se lo pasamos a tu página web de inmediato
     if (qr) {
         console.log("[TrueWin] Nuevo código QR generado. Enviando a la web...");
-        ultimoQR = qr; // Lo guardamos en memoria
-        io.emit('qr-update', qr); // Dispara el modal flotante en tu CRM
+        ultimoQR = qr;
+        io.emit('qr-update', qr);
     }
 
     if (connection === 'close') {
@@ -355,30 +353,34 @@ whatsappSock.ev.on('connection.update', async (update) => {
         
         console.log(`[TrueWin] Conexión cerrada. Código extraído: ${codigoError}. Razón: ${razonError}`);
 
-        // 🚨 CANDADO 1: Evita peleas de servidores en Render
-        if (codigoError === 440 || codigoError === DisconnectReason.restartRequired || (razonError && razonError.includes('conflict'))) {
-            console.error("[🚨 Choque de Instancias] Se detectó otra sesión. Deteniendo reconexión.");
+        // 🚨 CANDADO 1: Evita peleas reales de servidores en Render (Conflictos de sesión)
+        // 🚀 NOTA: Sacamos el 'restartRequired' de aquí. El 515 NO es un choque de instancias.
+        if (codigoError === 440 || (razonError && razonError.includes('conflict'))) {
+            console.error("[🚨 Choque de Instancias] Se detectó otra sesión activa real de este bot en la nube. Deteniendo reconexión.");
             return; 
         }
 
-        // 🚨 CANDADO 2: Freno de emergencia por baneo 
+        // 🚨 CANDADO 2: Freno de emergencia por baneo o sesión rechazada de Meta
         if (codigoError === 403 || codigoError === DisconnectReason.forbidden) {
-            console.error("[🚨 ALERTA MÁXIMA - CÓDIGO 403] Línea suspendida. DETENIENDO RECONEXIÓN.");
+            console.error("[🚨 ALERTA MÁXIMA - CÓDIGO 403] Los servidores de Meta rechazaron la autenticación. DETENIENDO RECONEXIÓN.");
             return; 
         }
 
-        // 🚨 CANDADO 3: Desconexión voluntaria 
+        // 🚨 CANDADO 3: Desconexión voluntaria desde los ajustes del teléfono
         if (codigoError === DisconnectReason.loggedOut) {
-            console.error("[🚨 Sesión Cerrada] El usuario desvinculó el bot. Deteniendo reconexión.");
+            console.error("[🚨 Sesión Cerrada] El usuario desvinculó el bot desde el teléfono. Deteniendo reconexión.");
             return; 
         }
 
-        console.log(`[TrueWin] Desconexión común detectada (${codigoError}). Intentando reconexión segura en 3 segundos...`);
+        // 🚀 RECONEXIÓN AUTOMÁTICA NORMAL (Aquí cae el 515 de forma segura)
+        // Cuando WhatsApp pida un reinicio de flujo, el bot esperará 3 segundos y levantará el canal limpio
+        console.log(`[TrueWin] Reiniciando flujo de forma limpia en 3 segundos (Código: ${codigoError})...`);
         setTimeout(() => iniciarConexionEnVivo(), 3000); 
     }
     
     if (connection === 'open') {
         console.log('[TrueWin] ¡CONEXIÓN GLOBAL ESTABLECIDA CON ÉXITO EN WHATSAPP!');
+        ultimoQR = null; // Limpiamos el caché del QR al conectar exitosamente
     }
 });
 
