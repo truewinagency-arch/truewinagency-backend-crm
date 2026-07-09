@@ -102,18 +102,23 @@ let whatsappSock = null;
 let ultimoQR = null;
 let ultimosMensajesKey = {};
 
+// 🚀 VARIABLES GLOBALES DE CACHÉ CRIPTOGRÁFICO (El parche del mensaje fantasma)
+// Al estar aquí afuera, sobreviven a los reinicios del socket (Código 515)
+let cacheCreds = {};
+let cacheKeys = {};
+let cacheCargada = false;;
+
 // =========================================================================
 // 3. CONEXIÓN A WHATSAPP CON CACHÉ EN RAM + LOTES EN FIRESTORE
 // =========================================================================
 async function connectToWhatsApp() {
     console.log("[TrueWin-Backend] Sincronizando e inicializando sesión remota...");
 
-    let cacheCreds = {};
-    let cacheKeys = {};
-    let cacheCargada = false;
+    // 🚨 (Asegúrate de que aquí adentro YA NO ESTÉN let cacheCreds, let cacheKeys ni let cacheCargada)
 
     const readState = async () => {
         if (cacheCargada) {
+            console.log("[TrueWin] Usando memoria caché rápida (Ignorando base de datos)...");
             return { creds: cacheCreds, keys: cacheKeys, tieneDatos: true };
         }
         try {
@@ -428,14 +433,17 @@ app.post('/send-text', async (req, res) => {
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
     
     try {
-        // 🚀 Procesamos el spintax del mensaje manual antes de evaluar links o enviar
         const mensajeFinal = procesarSpintax(mensaje);
+        
+        // 🚀 CORRECCIÓN DE JID: Obligamos a usar el formato oficial de Meta
+        const jidReal = formatearJid(numero);
 
-        await whatsappSock.sendMessage(numero, { text: mensajeFinal });
+        await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         
         res.json({ success: true });
     } catch (error) {
+        console.error("Fallo al enviar texto manual:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
