@@ -303,7 +303,7 @@ async function connectToWhatsApp() {
 
         // 🚀 CONEXIÓN DEL BOT: Activamos el evaluador en la nube sobre la marcha
         procesarBotEnNube(identificador, texto);
-        
+
         io.emit('nuevo-mensaje', { 
             numero: identificador, 
             nombre: nombrePerfil, 
@@ -650,16 +650,15 @@ app.post('/send-video', async (req, res) => {
 });
 
 // 🚀 CEREBRO DEL CHATBOT EN LA NUBE: Evalúa palabras clave 24/7 de forma autónoma
+// 🚀 AJUSTE EN EN backend (index.js): Fuerza el visto automático en la nube antes de disparar
 async function procesarBotEnNube(numeroCliente, textoMensaje) {
     if (!textoMensaje || !whatsappSock) return;
     const textoLimpio = textoMensaje.toLowerCase().trim();
 
     try {
-        // 1. Validar si el switch general del bot está encendido
         const configDoc = await db.collection('crm_config').doc('automatizaciones').get();
         if (!configDoc.exists || !configDoc.data().activo) return;
 
-        // 2. Traer las reglas activas de automatización
         const autosSnapshot = await db.collection('crm_automatizaciones').get();
         let automatizaciones = [];
         autosSnapshot.forEach(doc => automatizaciones.push(doc.data()));
@@ -672,23 +671,25 @@ async function procesarBotEnNube(numeroCliente, textoMensaje) {
             if (auto.condicion === 'contiene' && textoLimpio.includes(keyword)) haceMatch = true;
 
             if (haceMatch) {
-                console.log(`[🤖 Bot en Nube] MATCH detectado con "${keyword}". Extrayendo plantilla...`);
+                console.log(`[🤖 Bot en Nube] MATCH con "${keyword}". Activando visto y secuencia...`);
                 
-                // 3. Obtener la secuencia de mensajes asociada desde Firestore
-                const tplDoc = await db.collection('crm_plantillas').doc(auto.idPlantilla).get();
-                if (!tplDoc.exists) {
-                    console.error(`Plantilla ${auto.idPlantilla} ausente en Firestore.`);
-                    break;
+                // 1. 🚀 EL CANDADO ANTI-BAN: Marcamos como leído en la nube antes de mandar el flujo
+                if (ultimosMensajesKey[numeroCliente]) {
+                    try {
+                        await whatsappSock.readMessages([ultimosMensajesKey[numeroCliente]]);
+                        console.log(`[Anti-Ban] Doble check azul enviado al cliente de forma autónoma.`);
+                    } catch (e) { console.warn("No se pudo marcar visto en la nube:", e.message); }
                 }
+
+                // 2. Traer plantilla y despachar
+                const tplDoc = await db.collection('crm_plantillas').doc(auto.idPlantilla).get();
+                if (!tplDoc.exists) break;
                 
-                // Despachamos el hilo de mensajes de manera asíncrona en segundo plano
                 despacharFlujoDesdeNube(numeroCliente, tplDoc.data());
-                break; // Detiene la evaluación para evitar spam cruzado en el mismo mensaje
+                break; 
             }
         }
-    } catch (err) {
-        console.error("Fallo en el motor del bot en nube:", err);
-    }
+    } catch (err) { console.error(err); }
 }
 
 // 🚀 DESPACHADOR ASÍNCRONO EN NUBE: Ejecuta secuencias con pausas humanas anti-ban
