@@ -445,14 +445,15 @@ app.post('/send-audio', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-
+// 🚀 ENDPOINT CORREGIDO Y BLINDADO: Carga el historial en milisegundos sin congelarse
 app.get('/api/historial', async (req, res) => {
     try {
         const hostActivo = getHostNumber();
         if (hostActivo === 'desconectado') {
-            return res.json({ historial: {}, nombres: {}, fotos: {} }); 
+            return res.json({ historial: {}, nombres: {} }); 
         }
 
+        // Buscamos tus mensajes en la base de datos crm_mensajes
         const snapshot = await db.collection('crm_mensajes').where('host', '==', hostActivo).get();
         let todosLosMensajes = [];
         snapshot.forEach(doc => todosLosMensajes.push(doc.data()));
@@ -461,7 +462,6 @@ app.get('/api/historial', async (req, res) => {
 
         const historial = {};
         const nombres = {};
-        const fotos = {}; // 🚀 NUEVO ALMACÉN DE FOTOS
         
         todosLosMensajes.forEach(data => {
             if (!historial[data.numero]) historial[data.numero] = [];
@@ -476,28 +476,24 @@ app.get('/api/historial', async (req, res) => {
 
             if (data.tipo === 'in' && data.nombre) nombres[data.numero] = data.nombre;
         });
-
-        // 🚀 RESOLVER FOTOS EN TIEMPO REAL: Pedimos las fotos de perfil vigentes a Meta
-        if (whatsappSock) {
-            for (const jid of Object.keys(historial)) {
-                try {
-                    // El método profilePictureUrl de Baileys descarga la URL oficial (sirve para @s.whatsapp.net y @g.us)
-                    const urlFoto = await whatsappSock.profilePictureUrl(jid, 'image');
-                    if (urlFoto) {
-                        fotos[jid] = urlFoto;
-                    }
-                } catch (e) {
-                    // Si el usuario no tiene foto pública o falla, se queda vacía de forma segura
-                    fotos[jid] = null; 
-                }
-            }
-        }
         
-        // Enviamos el paquete de fotos adjunto a la respuesta
-        res.json({ historial, nombres, fotos });
+        // 🚀 RESPUESTA INMEDIATA: Entregamos el cerebro visual sin retrasos de red
+        res.json({ historial, nombres });
     } catch (error) {
         console.error("Error obteniendo historial:", error);
         res.status(500).json({ error: "Fallo al obtener historial" });
+    }
+});
+
+// 🚀 NUEVO ENDPOINT INDEPENDIENTE: Resuelve fotos bajo demanda en segundo plano
+app.get('/api/foto-perfil', async (req, res) => {
+    const { jid } = req.query;
+    if (!whatsappSock || !jid) return res.json({ url: null });
+    try {
+        const urlFoto = await whatsappSock.profilePictureUrl(jid, 'image');
+        res.json({ url: urlFoto });
+    } catch (e) {
+        res.json({ url: null }); // Si no tiene foto pública, responde null limpiamente sin tumbar el backend
     }
 });
 
