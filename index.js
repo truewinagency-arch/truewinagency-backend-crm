@@ -524,7 +524,39 @@ app.get('/api/foto-perfil', async (req, res) => {
     }
 });
 
+// =====================================================================
+// 🤖 ENDPOINTS PARA EL MOTOR DE AUTOMATIZACIONES
+// =====================================================================
 
+app.get('/api/automatizaciones', async (req, res) => {
+    try {
+        const snapshot = await db.collection('crm_automatizaciones').get();
+        let autos = [];
+        snapshot.forEach(doc => autos.push(doc.data()));
+        res.json(autos);
+    } catch (error) {
+        res.status(500).json({ error: "Fallo al obtener automatizaciones" });
+    }
+});
+
+app.post('/api/automatizaciones', async (req, res) => {
+    try {
+        const data = req.body;
+        await db.collection('crm_automatizaciones').doc(data.id).set(data);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: "Fallo al guardar automatización" });
+    }
+});
+
+app.delete('/api/automatizaciones/:id', async (req, res) => {
+    try {
+        await db.collection('crm_automatizaciones').doc(req.params.id).delete();
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: "Fallo al eliminar automatización" });
+    }
+});
 
 
 // =========================================================================
