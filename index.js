@@ -362,13 +362,25 @@ app.post('/send-audio', async (req, res) => {
     try {
         const jid = formatearJid(numero);
         
+        // 🚀 CAMUFLAJE: Mostramos que estamos grabando
         await whatsappSock.sendPresenceUpdate('recording', jid);
         await delay(4000); 
         
-        await whatsappSock.sendMessage(jid, { audio: { url: urlAudio }, mimetype: 'audio/mp4', ptt: true });
+        // 🚀 DETECCIÓN INTELIGENTE DE FORMATO
+        // Revisamos si el enlace de Firebase contiene ".mp3"
+        const esMP3 = urlAudio.toLowerCase().includes('.mp3');
+        
+        await whatsappSock.sendMessage(jid, { 
+            audio: { url: urlAudio }, 
+            // Si es MP3 usamos el formato oficial de música, si no, el de nota de voz
+            mimetype: esMP3 ? 'audio/mpeg' : 'audio/ogg; codecs=opus', 
+            // Apagamos el micrófono verde (PTT) si es un MP3 para evitar que el teléfono receptor colapse
+            ptt: !esMP3 
+        });
+
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        await guardarMensajeBD(numero, "TrueWin", "[Nota de voz enviada]", 'out'); 
+        await guardarMensajeBD(numero, "TrueWin", "[Audio enviado]", 'out'); 
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando audio a ${numero}:`, error);
