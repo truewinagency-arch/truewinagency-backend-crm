@@ -224,17 +224,17 @@ async function connectToWhatsApp() {
     whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
+        // 🚀 CANDADO ANTI-BAN 1: Camuflaje de huella digital nativa.
+        browser: ['Mac OS', 'Safari', '14.0.0'], 
         
-        // 🚀 1. DEJAMOS QUE META SINCRONICE (Eliminamos los bloqueos falsos)
-        // Ya no usamos syncFullHistory: false. Dejamos que valide nuestra sesión al 100%.
-        
-        // 🚀 2. FIRMA NATIVA: Eliminamos el 'browser' custom para usar la huella original de Baileys
-        
-        // 🚀 3. PARCHE DE REINTENTOS (Evita que los mensajes mueran en el aire)
+        // 🚀 CANDADO ANTI-BAN 2: Reparación de Cifrado E2EE.
+        // Retornamos undefined para obligar a Baileys a manejar las validaciones 
+        // de forma nativa sin falsificar hashes que Meta pueda detectar.
         getMessage: async (key) => {
-            return { conversation: 'TrueWin' };
+            return undefined;
         },
-        logger: pino({ level: 'error' })
+        // 🚀 Reducimos los logs internos que saturan la memoria
+        logger: pino({ level: 'silent' }) 
     });
 
     const { DisconnectReason } = require('@whiskeysockets/baileys');
@@ -261,19 +261,34 @@ async function connectToWhatsApp() {
                 return; 
             }
 
+            // 🚀 CORRECCIÓN: Destrucción Total ante Baneo (403)
             if (codigoError === 403 || codigoError === DisconnectReason.forbidden) {
-                console.error("[🚨 ALERTA 403] Servidores de Meta rechazaron autenticación. DETENIENDO.");
+                console.error("[🚨 ALERTA 403] Servidores de Meta rechazaron autenticación (Posible Baneo). DETENIENDO.");
+                io.emit('estado-conexion', 'desconectado'); // Forzamos el panel a ROJO en todos los CRMs abiertos
+                whatsappSock = null; // Matamos el socket zombi
+                
+                // Limpiamos la RAM para evitar que el bot intente usar llaves baneadas
+                cacheCreds = {}; 
+                cacheKeys = {}; 
+                cacheCargada = false;
                 return; 
             }
 
+            // 🚀 CORRECCIÓN: Destrucción Total ante Desvinculación de Dispositivo
             if (codigoError === DisconnectReason.loggedOut) {
-                console.error("[🚨 Sesión Cerrada] Usuario desvinculó el bot. Deteniendo reconexión.");
+                console.error("[🚨 Sesión Cerrada] Usuario desvinculó el bot desde el celular. Deteniendo reconexión.");
+                io.emit('estado-conexion', 'desconectado'); // Forzamos el panel a ROJO
+                whatsappSock = null; 
+                
+                cacheCreds = {}; 
+                cacheKeys = {}; 
+                cacheCargada = false;
                 return; 
             }
 
             console.log(`[TrueWin] Reiniciando flujo de forma limpia en 3 segundos (Código: ${codigoError})...`);
             
-            // 🚀 4. DESTRUCTOR DE ZOMBIES: Matamos el socket viejo antes de crear el nuevo
+            // Destructor de sockets viejo para evitar clones en reconexiones 500/503/515
             if (whatsappSock) {
                 whatsappSock.ev.removeAllListeners();
             }
@@ -295,6 +310,21 @@ async function connectToWhatsApp() {
             return;
         }
 
+        // 🚀 EXTRAEMOS EL TIPO DE MENSAJE AL INICIO PARA LOS FILTROS
+        const messageType = Object.keys(msg.message || {})[0];
+
+        // 🚀 CANDADO ANTI-BAN 3: Muro de contención para eventos de sistema.
+        // Ignoramos votos de encuestas, reacciones y protocolos invisibles para no saturar.
+        if (
+            messageType === 'protocolMessage' || 
+            messageType === 'pollUpdateMessage' || 
+            messageType === 'pollCreationMessage' ||
+            messageType === 'reactionMessage' ||
+            messageType === 'senderKeyDistributionMessage'
+        ) {
+            return; 
+        }
+
         // 🚀 CANDADO ANTI-BLOQUEO: Filtra y destruye la sincronización histórica masiva
         const tiempoActualUnix = Math.floor(Date.now() / 1000);
         if (msg.messageTimestamp && (tiempoActualUnix - msg.messageTimestamp) > 60) {
@@ -311,22 +341,22 @@ async function connectToWhatsApp() {
 
         if (esGrupo) {
             remitenteEspecifico = msg.pushName || msg.key.participant?.split('@')[0] || "Miembro";
-            try {
-                const metadata = await whatsappSock.groupMetadata(remoteJid);
-                nombrePerfil = metadata.subject || "Grupo de WhatsApp";
-            } catch (error) {}
+            
+            // 🚀 CANDADO ANTI-BAN 4: Eliminamos el groupMetadata() en caliente.
+            // Poner el nombre estático evita que el bot haga un ataque DDoS a los servidores 
+            // de Meta cada vez que alguien escribe o vota en el grupo.
+            nombrePerfil = "Grupo de WhatsApp";
         }
         
         const identificador = remoteJid; 
         ultimosMensajesKey[identificador] = msg.key;
         
         // 🚀 MOTOR DE TRADUCCIÓN MULTIMEDIA ENTRANTE
-        const messageType = Object.keys(msg.message || {})[0];
         let texto = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
         let mediaUrl = null;
         let mediaType = null;
 
-       if (messageType === 'imageMessage') {
+        if (messageType === 'imageMessage') {
             mediaType = 'image';
             // 🚀 CORREGIDO: Si no hay caption, se guarda un texto vacío "" en lugar de "[Imagen recibida]"
             texto = msg.message.imageMessage.caption || ""; 
