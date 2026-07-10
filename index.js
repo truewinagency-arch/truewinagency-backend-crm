@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const pino = require('pino');
-const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON, Browsers } = require('@whiskeysockets/baileys');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 
@@ -224,16 +224,12 @@ async function connectToWhatsApp() {
     whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        // 🚀 CANDADO ANTI-BAN 1: Camuflaje de huella digital nativa.
-        browser: ['Mac OS', 'Safari', '14.0.0'], 
+        // 🚀 CANDADO ANTI-BAN 1: Huella digital autorizada y sincronizada con el protocolo.
+        browser: Browsers.macOS('Desktop'), 
         
-        // 🚀 CANDADO ANTI-BAN 2: Reparación de Cifrado E2EE.
-        // Retornamos undefined para obligar a Baileys a manejar las validaciones 
-        // de forma nativa sin falsificar hashes que Meta pueda detectar.
         getMessage: async (key) => {
             return undefined;
         },
-        // 🚀 Reducimos los logs internos que saturan la memoria
         logger: pino({ level: 'silent' }) 
     });
 
@@ -475,36 +471,14 @@ app.post('/send-text', async (req, res) => {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        // Escáner de enlaces manual
-        const urls = mensajeFinal.match(/(https?:\/\/[^\s]+)/g);
-        
-        if (urls && urls.length > 0) {
-            const urlDetectada = urls[0];
-            console.log(`[Link Detectado] Despachando vista previa NATIVA para: ${urlDetectada}`);
-
-            // 🚀 ESTRUCTURA OFICIAL (Sin externalAdReply)
-            // Estas son las propiedades raíz permitidas por Meta para usuarios comunes.
-            await whatsappSock.sendMessage(jidReal, { 
-                text: mensajeFinal,
-                matchedText: urlDetectada,
-                canonicalUrl: urlDetectada,
-                title: "TRUEWIN AGENCY - MATERIAL",
-                description: "🛒 OBTÉN ESTE MATERIAL YA!"
-                // ⚠️ Omitimos el jpegThumbnail a propósito para evitar la barrera de los 64KB.
-                // Esto garantiza que la tarjeta con el Título y la Descripción llegue SIEMPRE.
-            }, 
-            // 🌟 EL CANDADO ANTI-FREEZE: Apagamos el scraper de Baileys
-            { linkPreview: null });
-
-        } else {
-            // Texto plano tradicional si no hay links
-            await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
-        }
+        // 🚀 CANDADO ANTI-BAN 3: Enviar mensaje estructurado legalmente
+        // Sin forzar metadatos privados de Meta, para que el número no sea marcado como spammer.
+        await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
 
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con tarjeta estricta:", error);
+        console.error("Fallo al enviar texto manual:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
@@ -815,14 +789,18 @@ async function procesarBotEnNube(numeroCliente, textoMensaje) {
 
                 console.log(`[🤖 Bot en Nube] Ejecución autorizada para la variante "${keywordUsada}". Despachando secuencia...`);
                 
-                // 2. Ejecutar visto automático anti-ban
-                if (ultimosMensajesKey[numeroCliente]) {
-                    try {
-                        await whatsappSock.readMessages([ultimosMensajesKey[numeroCliente]]);
-                    } catch (e) { console.warn("Fallo al marcar visto autonomo:", e.message); }
-                }
+                // 🚀 CANDADO ANTI-BAN 2: Pausa biológica antes de clavar el visto
+                const tiempoLecturaHumana = Math.floor(Math.random() * (3500 - 1500 + 1)) + 1500;
+                
+                setTimeout(async () => {
+                    if (ultimosMensajesKey[numeroCliente]) {
+                        try {
+                            await whatsappSock.readMessages([ultimosMensajesKey[numeroCliente]]);
+                        } catch (e) { }
+                    }
+                }, tiempoLecturaHumana);
 
-                // 3. Cargar secuencia y disparar ráfaga asíncrona
+                // 3. Cargar secuencia y disparar ráfaga asíncrona (esto se mantiene igual)
                 const tplDoc = await db.collection('crm_plantillas').doc(auto.idPlantilla).get();
                 if (!tplDoc.exists) {
                     console.error(`La plantilla ${auto.idPlantilla} no existe en Firestore.`);
