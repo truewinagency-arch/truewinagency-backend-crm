@@ -449,14 +449,7 @@ app.post('/send-text', async (req, res) => {
             const urlDetectada = urls[0];
             const esGrupo = urlDetectada.includes('chat.whatsapp.com');
 
-            console.log(`[Link Detectado] Generando tarjeta enriquecida local para: ${urlDetectada}`);
-
-            // 🚀 IMAGEN DE RESPALDO EN BASE64 (Un píxel negro ultra-liviano)
-            // Esto evita descargas HTTP externas y responde en 1 milisegundo
-            const thumbnailBuffer = Buffer.from(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", 
-                "base64"
-            );
+            console.log(`[Link Detectado] Generando tarjeta enriquecida oficial para: ${urlDetectada}`);
 
             await whatsappSock.sendMessage(jidReal, { 
                 text: mensajeFinal,
@@ -465,15 +458,16 @@ app.post('/send-text', async (req, res) => {
                         title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Ver Detalles del Catálogo",
                         body: "Truezone Agency",
                         sourceUrl: urlDetectada,
-                        // 🌟 CAMBIO CLAVE: Enviamos un búfer en RAM en lugar de una URL externa
-                        thumbnail: thumbnailBuffer, 
+                        // 🌟 LA SOLUCIÓN REAL: Usamos una imagen fija y limpia desde tu Firebase Storage
+                        // Este dominio es de confianza absoluta para Meta y descarga al instante.
+                        thumbnailUrl: "https://firebasestorage.googleapis.com/v0/b/truezone-agency.firebasestorage.app/o/logo_tw.jpg?alt=media", 
                         mediaType: 1,
                         showAdAttribution: true
                     }
                 }
             });
         } else {
-            // Texto plano tradicional
+            // Texto plano tradicional si no hay links
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
 
