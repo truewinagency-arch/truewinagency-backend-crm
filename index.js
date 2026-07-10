@@ -875,12 +875,27 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                     
                     // Algoritmo de tipeo realista según el largo del texto real
                     const caracteres = textoBurbuja ? textoBurbuja.length : 20;
-                    let tiempoTipeo = caracteres * 15; 
-                    if (tiempoTipeo < 1500) tiempoTipeo = 1500;
-                    if (tiempoTipeo > 4500) tiempoTipeo = 4500;
                     
-                    console.log(`[Anti-Ban] Simulando tipeo por ${tiempoTipeo / 1000}s para un mensaje de ${caracteres} letras.`);
-                    await pause(tiempoTipeo); 
+                    // 1. Velocidad variable: un humano en celular tarda entre 25ms y 55ms por letra
+                    const velocidadPorLetra = Math.floor(Math.random() * (55 - 25 + 1)) + 25; 
+                    
+                    // 2. Tiempo de reacción: pausa inicial aleatoria antes de empezar a teclear (entre 300ms y 800ms)
+                    const tiempoReaccion = Math.floor(Math.random() * (800 - 300 + 1)) + 300;
+                    
+                    let tiempoTipeo = (caracteres * velocidadPorLetra) + tiempoReaccion;
+                    
+                    // 3. Límites Dinámicos (Ya no son siempre 1.5s o 4.5s exactos)
+                    const limiteMinimo = Math.floor(Math.random() * (1900 - 1200 + 1)) + 1200; // Mínimo entre 1.2s y 1.9s
+                    const limiteMaximo = Math.floor(Math.random() * (6500 - 4800 + 1)) + 4800; // Máximo entre 4.8s y 6.5s
+                    
+                    if (tiempoTipeo < limiteMinimo) tiempoTipeo = limiteMinimo;
+                    if (tiempoTipeo > limiteMaximo) tiempoTipeo = limiteMaximo;
+                    
+                    // Redondeamos para que los logs se vean limpios
+                    tiempoTipeo = Math.floor(tiempoTipeo);
+                    
+                    console.log(`[Anti-Ban] Simulando tipeo por ${(tiempoTipeo / 1000).toFixed(2)}s para un mensaje de ${caracteres} letras.`);
+                    await pause(tiempoTipeo);
                 }
             } catch (e) { 
                 console.warn("No se pudo actualizar la telemetría de presencia:", e.message); 
