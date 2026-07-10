@@ -439,40 +439,44 @@ app.post('/send-text', async (req, res) => {
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
     
     try {
-        // 1. Procesamos spintax y formateamos el JID oficial de Meta
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        // 🔍 2. ESCÁNER DE ENLACES: Buscamos si el texto contiene una URL válida
+        // Escáner de enlaces
         const urls = mensajeFinal.match(/(https?:\/\/[^\s]+)/g);
         
         if (urls && urls.length > 0) {
             const urlDetectada = urls[0];
             const esGrupo = urlDetectada.includes('chat.whatsapp.com');
 
-            console.log(`[Link Detectado] Generando tarjeta enriquecida para: ${urlDetectada}`);
+            console.log(`[Link Detectado] Generando tarjeta enriquecida local para: ${urlDetectada}`);
 
-            // 🚀 DISPARO CON TARJETA ENRIQUECIDA (Baja por el canal con encriptación sana)
+            // 🚀 IMAGEN DE RESPALDO EN BASE64 (Un píxel negro ultra-liviano)
+            // Esto evita descargas HTTP externas y responde en 1 milisegundo
+            const thumbnailBuffer = Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", 
+                "base64"
+            );
+
             await whatsappSock.sendMessage(jidReal, { 
                 text: mensajeFinal,
                 contextInfo: {
                     externalAdReply: {
-                        title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Toca aquí para abrir el enlace",
+                        title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Ver Detalles del Catálogo",
                         body: "Truezone Agency",
                         sourceUrl: urlDetectada,
-                        // 🌟 LA CLAVE: Imagen pública fija (Negro/Dorado) que evita que la Promesa se congele
-                        thumbnailUrl: "https://i.imgur.com/jM8A80e.jpg", 
+                        // 🌟 CAMBIO CLAVE: Enviamos un búfer en RAM en lugar de una URL externa
+                        thumbnail: thumbnailBuffer, 
                         mediaType: 1,
                         showAdAttribution: true
                     }
                 }
             });
         } else {
-            // Si es un texto plano corriente sin enlaces, se va directo de forma tradicional
+            // Texto plano tradicional
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
 
-        // 3. Guardamos el registro en el historial y respondemos éxito a la web
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
