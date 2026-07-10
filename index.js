@@ -451,20 +451,38 @@ app.post('/send-text', async (req, res) => {
 
             console.log(`[Link Detectado] Despachando tarjeta pre-renderizada estricta para: ${urlDetectada}`);
 
-            // 🚀 MANDAMOS EL MENSAJE ESPECIFICANDO LOS METADATOS DIRECTOS
-            // Al rellenar esto de forma estricta, evitamos que Baileys intente "visitar" tu web
+            // 🚀 MOTOR DE DESCARGA BINARIA NATIVA (Sin dependencias externas)
+            const https = require('https');
+            const descargarImagen = (url) => new Promise((resolve, reject) => {
+                https.get(url, (respuesta) => {
+                    const chunks = [];
+                    respuesta.on('data', (chunk) => chunks.push(chunk));
+                    respuesta.on('end', () => resolve(Buffer.concat(chunks)));
+                }).on('error', reject);
+            });
+
+            let bufferJPEG;
+            try {
+                // 🌟 ATENCIÓN: Esta URL TIENE que ser un .JPG o .JPEG obligatoriamente.
+                // Reemplaza esto por tu nueva URL cuando conviertas tu catálogo a JPG.
+                // Por ahora, te dejo una imagen temporal en JPG para que veas que funciona.
+                bufferJPEG = await descargarImagen("https://i.imgur.com/8Q3u58B.jpg");
+            } catch(e) {
+                // Si la red falla, inyecta un pixel blanco mágico en JPEG para que WhatsApp no rechace el mensaje
+                bufferJPEG = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
+            }
+
+            // Despachamos la tarjeta inyectando el binario directo, evadiendo los auto-scrapers de Baileys
             await whatsappSock.sendMessage(jidReal, { 
                 text: mensajeFinal,
                 contextInfo: {
-                    // Usamos las mismas propiedades og que me pasaste para que se vea nativo
                     externalAdReply: {
                         title: "TRUEWIN AGENCY - MATERIAL",
-                        body: "🛒 OBTEN ESTE MATERIAL YA!",
+                        body: "🛒 OBTÉN ESTE MATERIAL YA!",
                         mediaType: 1,
-                        previewType: 0, // 🌟 CLAVE: Le dice a Baileys que NO intente raspar el link
-                        renderLargerThumbnail: true, // Hace que la tarjeta se vea grande y premium
-                        thumbnailUrl: "https://truezone-agency.web.app/truewinagency/assets/catalogo.png",
-                        sourceUrl: urlDetectada
+                        renderLargerThumbnail: true,
+                        sourceUrl: urlDetectada,
+                        thumbnail: bufferJPEG // La magia ocurre aquí
                     }
                 }
             });
