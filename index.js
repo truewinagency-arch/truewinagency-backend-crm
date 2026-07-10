@@ -442,27 +442,29 @@ app.post('/send-text', async (req, res) => {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        // Escáner de enlaces
+        // Escáner de enlaces manual
         const urls = mensajeFinal.match(/(https?:\/\/[^\s]+)/g);
         
         if (urls && urls.length > 0) {
             const urlDetectada = urls[0];
             const esGrupo = urlDetectada.includes('chat.whatsapp.com');
 
-            console.log(`[Link Detectado] Generando tarjeta enriquecida oficial para: ${urlDetectada}`);
+            console.log(`[Link Detectado] Despachando tarjeta pre-renderizada estricta para: ${urlDetectada}`);
 
+            // 🚀 MANDAMOS EL MENSAJE ESPECIFICANDO LOS METADATOS DIRECTOS
+            // Al rellenar esto de forma estricta, evitamos que Baileys intente "visitar" tu web
             await whatsappSock.sendMessage(jidReal, { 
                 text: mensajeFinal,
                 contextInfo: {
+                    // Usamos las mismas propiedades og que me pasaste para que se vea nativo
                     externalAdReply: {
-                        title: esGrupo ? "Únete a nuestro Grupo de WhatsApp" : "🌐 Ver Detalles del Catálogo",
-                        body: "Truezone Agency",
-                        sourceUrl: urlDetectada,
-                        // 🌟 LA SOLUCIÓN REAL: Usamos una imagen fija y limpia desde tu Firebase Storage
-                        // Este dominio es de confianza absoluta para Meta y descarga al instante.
-                        thumbnailUrl: "https://firebasestorage.googleapis.com/v0/b/truezone-agency.firebasestorage.app/o/logo_tw.jpg?alt=media", 
+                        title: "TRUEWIN AGENCY - MATERIAL",
+                        body: "🛒 OBTEN ESTE MATERIAL YA!",
                         mediaType: 1,
-                        showAdAttribution: true
+                        previewType: 0, // 🌟 CLAVE: Le dice a Baileys que NO intente raspar el link
+                        renderLargerThumbnail: true, // Hace que la tarjeta se vea grande y premium
+                        thumbnailUrl: "https://truezone-agency.web.app/truewinagency/assets/catalogo.png",
+                        sourceUrl: urlDetectada
                     }
                 }
             });
@@ -474,7 +476,7 @@ app.post('/send-text', async (req, res) => {
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con tarjeta:", error);
+        console.error("Fallo al enviar texto manual con tarjeta estricta:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
