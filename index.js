@@ -451,41 +451,57 @@ app.post('/send-text', async (req, res) => {
 
             console.log(`[Link Detectado] Despachando tarjeta pre-renderizada estricta para: ${urlDetectada}`);
 
-            // 🚀 MOTOR DE DESCARGA BINARIA NATIVA (Sin dependencias externas)
-            const https = require('https');
-            const descargarImagen = (url) => new Promise((resolve, reject) => {
-                https.get(url, (respuesta) => {
-                    const chunks = [];
-                    respuesta.on('data', (chunk) => chunks.push(chunk));
-                    respuesta.on('end', () => resolve(Buffer.concat(chunks)));
-                }).on('error', reject);
-            });
-
-            let bufferJPEG;
+            // 🚀 MOTOR DE DESCARGA BINARIA ANTI-BLOQUEOS (Fetch)
+            let bufferJPEG = null;
             try {
-                // 🌟 ATENCIÓN: Esta URL TIENE que ser un .JPG o .JPEG obligatoriamente.
-                // Reemplaza esto por tu nueva URL cuando conviertas tu catálogo a JPG.
-                // Por ahora, te dejo una imagen temporal en JPG para que veas que funciona.
-                bufferJPEG = await descargarImagen("https://i.imgur.com/8Q3u58B.jpg");
+                // ⚠️ COLOCA AQUÍ EL ENLACE DE TU IMAGEN .JPG SUBIDA A FIREBASE
+                const urlImagen = "https://firebasestorage.googleapis.com/v0/b/truezone-agency.firebasestorage.app/o/logo_catalogo.jpg?alt=media";
+
+                // Disfrazamos la petición como si fuera un navegador de PC real
+                const respuesta = await fetch(urlImagen, {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                });
+
+                if (respuesta.ok) {
+                    const arrayBuffer = await respuesta.arrayBuffer();
+                    bufferJPEG = Buffer.from(arrayBuffer);
+
+                    // Validación Criptográfica Hexadecimal: ¿Es realmente un JPEG?
+                    if (bufferJPEG[0] !== 0xFF || bufferJPEG[1] !== 0xD8) {
+                        console.error("[🚨 ERROR] La imagen descargada no es un formato JPG válido. WhatsApp rechazará el mensaje.");
+                        bufferJPEG = null; // Anulamos el búfer para enviar el mensaje sin imagen y asegurar que llegue
+                    }
+                } else {
+                    console.error(`[🚨 ERROR] El servidor de la imagen respondió con error: ${respuesta.status}`);
+                }
             } catch(e) {
-                // Si la red falla, inyecta un pixel blanco mágico en JPEG para que WhatsApp no rechace el mensaje
-                bufferJPEG = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
+                console.error("[🚨 ERROR] Fallo descargando la imagen de la tarjeta:", e.message);
             }
 
-            // Despachamos la tarjeta inyectando el binario directo, evadiendo los auto-scrapers de Baileys
+            // Construimos el objeto de contexto
+            const contextoTarjeta = {
+                externalAdReply: {
+                    title: "TRUEWIN AGENCY - MATERIAL",
+                    body: "🛒 OBTÉN ESTE MATERIAL YA!",
+                    mediaType: 1,
+                    renderLargerThumbnail: true,
+                    sourceUrl: urlDetectada
+                }
+            };
+
+            // Solo inyectamos el thumbnail si el búfer pasó la validación estricta
+            if (bufferJPEG) {
+                contextoTarjeta.externalAdReply.thumbnail = bufferJPEG;
+            }
+
+            // Despachamos la tarjeta
             await whatsappSock.sendMessage(jidReal, { 
                 text: mensajeFinal,
-                contextInfo: {
-                    externalAdReply: {
-                        title: "TRUEWIN AGENCY - MATERIAL",
-                        body: "🛒 OBTÉN ESTE MATERIAL YA!",
-                        mediaType: 1,
-                        renderLargerThumbnail: true,
-                        sourceUrl: urlDetectada,
-                        thumbnail: bufferJPEG // La magia ocurre aquí
-                    }
-                }
+                contextInfo: contextoTarjeta
             });
+            
+            console.log(`[Éxito] Tarjeta enviada correctamente al ${numero}`);
+
         } else {
             // Texto plano tradicional si no hay links
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
