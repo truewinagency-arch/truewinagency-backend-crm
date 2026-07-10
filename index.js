@@ -434,6 +434,9 @@ app.get('/status', (req, res) => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// =====================================================================
+// 🌐 ENDPOINT MANUAL: VISTA PREVIA NATIVA (100% LEGAL ANTI-SHADOWBAN)
+// =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
@@ -447,48 +450,21 @@ app.post('/send-text', async (req, res) => {
         
         if (urls && urls.length > 0) {
             const urlDetectada = urls[0];
-            const esGrupo = urlDetectada.includes('chat.whatsapp.com');
+            console.log(`[Link Detectado] Despachando vista previa NATIVA para: ${urlDetectada}`);
 
-            // 🚀 BÚFER DE SUPERVIVENCIA: Un píxel JPEG nativo garantizado.
-            // Si todo falla, esto asegura que WhatsApp acepte el paquete y muestre la tarjeta.
-            let thumbnailFinal = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
-
-            try {
-                // ⚠️ IMPORTANTE: Aquí debes poner una URL que sea estrictamente .jpg o .jpeg
-                // Te dejé un logo temporal en JPG alojado en Firebase para que veas la magia.
-                const urlImagenJPG = "https://firebasestorage.googleapis.com/v0/b/truezone-agency.firebasestorage.app/o/logo_tw.jpg?alt=media"; 
-                
-                const respuesta = await fetch(urlImagenJPG);
-                if (respuesta.ok) {
-                    const arrayBuffer = await respuesta.arrayBuffer();
-                    const bufferDescargado = Buffer.from(arrayBuffer);
-                    
-                    // 🔒 ESCÁNER HEXADECIMAL: Verificamos si realmente es un JPEG (Firma FF D8) y pesa menos de 64KB
-                    if (bufferDescargado[0] === 0xFF && bufferDescargado[1] === 0xD8 && bufferDescargado.length < 60000) {
-                        thumbnailFinal = bufferDescargado;
-                        console.log("[Link Detectado] Imagen JPG validada con éxito. Renderizando tarjeta.");
-                    } else {
-                        console.warn("[Link Detectado] La imagen no es JPEG o es muy pesada. Usando búfer de supervivencia.");
-                    }
-                }
-            } catch (e) {
-                console.warn("[Link Detectado] Fallo de red al bajar imagen. Usando búfer de supervivencia.");
-            }
-
-            // 🚀 ESTRUCTURA OFICIAL CON IMAGEN ASEGURADA
+            // 🚀 ESTRUCTURA OFICIAL (Sin externalAdReply)
+            // Estas son las propiedades raíz permitidas por Meta para usuarios comunes.
             await whatsappSock.sendMessage(jidReal, { 
                 text: mensajeFinal,
-                contextInfo: {
-                    externalAdReply: {
-                        title: esGrupo ? "Únete a nuestro Grupo" : "TRUEWIN AGENCY - MATERIAL",
-                        body: esGrupo ? "Truezone Agency" : "🛒 OBTÉN ESTE MATERIAL YA!",
-                        mediaType: 1,
-                        sourceUrl: urlDetectada,
-                        thumbnail: thumbnailFinal, // <--- Esta es la clave del éxito
-                        renderLargerThumbnail: true // Muestra la imagen en grande
-                    }
-                }
-            });
+                matchedText: urlDetectada,
+                canonicalUrl: urlDetectada,
+                title: "TRUEWIN AGENCY - MATERIAL",
+                description: "🛒 OBTÉN ESTE MATERIAL YA!"
+                // ⚠️ Omitimos el jpegThumbnail a propósito para evitar la barrera de los 64KB.
+                // Esto garantiza que la tarjeta con el Título y la Descripción llegue SIEMPRE.
+            }, 
+            // 🌟 EL CANDADO ANTI-FREEZE: Apagamos el scraper de Baileys
+            { linkPreview: null });
 
         } else {
             // Texto plano tradicional si no hay links
@@ -498,7 +474,7 @@ app.post('/send-text', async (req, res) => {
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con tarjeta:", error);
+        console.error("Fallo al enviar texto manual con tarjeta estricta:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
