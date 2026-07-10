@@ -152,13 +152,21 @@ async function connectToWhatsApp() {
         }
     };
 
+   // =========================================================================
+    // 🚀 BLOQUE DE CREDENCIALES CORREGIDO (UNIFICADO Y ANTI-BUCLE 428)
+    // =========================================================================
     const sesionFirebase = await readState();
 
-    let credencialesActivas = sesionFirebase.creds;
-    if (!sesionFirebase.tieneDatos || Object.keys(credencialesActivas).length === 0) {
-        console.log('[TrueWin] Base de datos limpia. Generando credenciales oficiales para pedir QR...');
+    // Usamos directamente cacheCreds en lugar de la respuesta de Firebase para proteger la RAM
+    let credencialesActivas = cacheCreds; 
+    
+    if (Object.keys(credencialesActivas).length === 0) {
+        console.log('[TrueWin] Memoria y DB limpias. Generando credenciales oficiales para pedir QR...');
         credencialesActivas = initAuthCreds();
         cacheCreds = credencialesActivas;
+        
+        // 🌟 PIEZA MÁGICA: Evita que si hay un micro-corte 428, se borre la RAM y genere llaves infinitas
+        cacheCargada = true; 
     }
 
     const { state, saveCreds } = {
@@ -224,8 +232,9 @@ async function connectToWhatsApp() {
     whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        // 🚀 CANDADO ANTI-BAN 1: Huella digital autorizada y sincronizada con el protocolo.
-        browser: Browsers.macOS('Desktop'), 
+        
+        // 🚀 CANDADO ANTI-BAN 1: Eliminamos la propiedad 'browser' por completo.
+        // Dejamos que Baileys use su camuflaje nativo por defecto para evitar rechazos 428.
         
         getMessage: async (key) => {
             return undefined;
