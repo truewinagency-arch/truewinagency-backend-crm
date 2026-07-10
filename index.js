@@ -782,28 +782,29 @@ async function procesarBotEnNube(numeroCliente, textoMensaje) {
         autosSnapshot.forEach(doc => automatizaciones.push(doc.data()));
 
         for (const auto of automatizaciones) {
-            const keyword = auto.palabraClave.toLowerCase().trim();
+            // 🚀 SEPARADOR DE CHIPS EN LA NUBE
+            const arrayKeywords = auto.palabraClave.split(',').map(k => k.toLowerCase().trim()).filter(k => k);
             let haceMatch = false;
+            let keywordUsada = "";
 
-            if (auto.condicion === 'exacta' && textoLimpio === keyword) haceMatch = true;
-            if (auto.condicion === 'contiene' && textoLimpio.includes(keyword)) haceMatch = true;
+            // Evaluamos cada chip de forma individual
+            for (const kw of arrayKeywords) {
+                if (auto.condicion === 'exacta' && textoLimpio === kw) { haceMatch = true; keywordUsada = kw; break; }
+                if (auto.condicion === 'contiene' && textoLimpio.includes(kw)) { haceMatch = true; keywordUsada = kw; break; }
+            }
 
             if (haceMatch) {
                 
-                // 1. 🚀 EL CANDADO DE FRECUENCIA INTELIGENTE
                 if (auto.frecuencia === 'unica') {
-                    // Creamos una firma limpia eliminando caracteres técnicos del JID (ej: auto_12345_584123456789)
+                    // (Aquí mantienes tu código exacto del idLogUnico, registroDoc, etc...)
                     const idLogUnico = `${auto.id}_${numeroCliente.replace(/[^a-zA-Z0-9]/g, '')}`;
-                    
-                    // Verificamos si este cliente específico ya quemó esta regla en el pasado
                     const registroDoc = await db.collection('crm_registro_bot').doc(idLogUnico).get();
                     
                     if (registroDoc.exists) {
-                        console.log(`[🤖 Bot Protegido] El cliente ${numeroCliente} ya recibió la regla ÚNICA "${keyword}" anteriormente. Omitiendo despacho.`);
-                        break; // Rompemos el ciclo de forma segura sin enviar nada
+                        console.log(`[🤖 Bot Protegido] El cliente ya recibió la regla. Omitiendo.`);
+                        break; 
                     }
                     
-                    // Si no existe el registro, lo creamos de inmediato en la base de datos para congelar futuros intentos
                     await db.collection('crm_registro_bot').doc(idLogUnico).set({
                         idAutomatizacion: auto.id,
                         palabraClave: auto.palabraClave,
@@ -812,7 +813,7 @@ async function procesarBotEnNube(numeroCliente, textoMensaje) {
                     });
                 }
 
-                console.log(`[🤖 Bot en Nube] Ejecución autorizada para "${keyword}". Despachando secuencia...`);
+                console.log(`[🤖 Bot en Nube] Ejecución autorizada para la variante "${keywordUsada}". Despachando secuencia...`);
                 
                 // 2. Ejecutar visto automático anti-ban
                 if (ultimosMensajesKey[numeroCliente]) {
