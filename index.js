@@ -311,15 +311,19 @@ async function connectToWhatsApp() {
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast' || msg.key.remoteJid.includes('@newsletter')) {
+        
+        // 🚀 CANDADO ELIMINADO: Quitamos el "msg.key.fromMe" para que el servidor pueda leer lo que tú envías desde el celular.
+        if (!msg.message || msg.key.remoteJid === 'status@broadcast' || msg.key.remoteJid.includes('@newsletter')) {
             return;
         }
 
-        // 🚀 EXTRAEMOS EL TIPO DE MENSAJE AL INICIO PARA LOS FILTROS
+        // 🚀 DETECTOR DE DIRECCIÓN: ¿Lo envió el cliente ('in') o lo enviaste tú desde tu teléfono ('out')?
+        const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
+
+        // EXTRAEMOS EL TIPO DE MENSAJE AL INICIO PARA LOS FILTROS
         const messageType = Object.keys(msg.message || {})[0];
 
-        // 🚀 CANDADO ANTI-BAN 3: Muro de contención para eventos de sistema.
-        // Ignoramos votos de encuestas, reacciones y protocolos invisibles para no saturar.
+        // Muro de contención para eventos de sistema.
         if (
             messageType === 'protocolMessage' || 
             messageType === 'pollUpdateMessage' || 
@@ -330,11 +334,9 @@ async function connectToWhatsApp() {
             return; 
         }
 
-        // 🚀 CANDADO ANTI-BLOQUEO: Filtra y destruye la sincronización histórica masiva
+        // Filtra y destruye la sincronización histórica masiva
         const tiempoActualUnix = Math.floor(Date.now() / 1000);
         if (msg.messageTimestamp && (tiempoActualUnix - msg.messageTimestamp) > 60) {
-            // Si el mensaje tiene más de 60 segundos de haber sido enviado en el pasado, 
-            // significa que es parte del historial viejo de WhatsApp y lo ignoramos.
             console.log(`[Sincronización] Ignorando mensaje antiguo del JID: ${msg.key.remoteJid}`);
             return;
         }
@@ -346,38 +348,34 @@ async function connectToWhatsApp() {
 
         if (esGrupo) {
             remitenteEspecifico = msg.pushName || msg.key.participant?.split('@')[0] || "Miembro";
-            
-            // 🚀 CANDADO ANTI-BAN 4: Eliminamos el groupMetadata() en caliente.
-            // Poner el nombre estático evita que el bot haga un ataque DDoS a los servidores 
-            // de Meta cada vez que alguien escribe o vota en el grupo.
             nombrePerfil = "Grupo de WhatsApp";
         }
         
         const identificador = remoteJid; 
-        ultimosMensajesKey[identificador] = msg.key;
         
-        // 🚀 MOTOR DE TRADUCCIÓN MULTIMEDIA ENTRANTE
+        // 🚀 Solo guardamos la llave para el "visto azul automático" si el mensaje es del cliente
+        if (tipoMensaje === 'in') {
+            ultimosMensajesKey[identificador] = msg.key;
+        }
+        
+        // MOTOR DE TRADUCCIÓN MULTIMEDIA ENTRANTE
         let texto = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
         let mediaUrl = null;
         let mediaType = null;
 
         if (messageType === 'imageMessage') {
             mediaType = 'image';
-            // 🚀 CORREGIDO: Si no hay caption, se guarda un texto vacío "" en lugar de "[Imagen recibida]"
             texto = msg.message.imageMessage.caption || ""; 
         } else if (messageType === 'videoMessage') {
             mediaType = 'video';
-            // 🚀 CORREGIDO: Si no hay caption, se guarda un texto vacío "" en lugar de "[Video recibido]"
             texto = msg.message.videoMessage.caption || ""; 
         } else if (messageType === 'audioMessage') {
             mediaType = 'audio';
-            // 🚀 CORREGIDO: Las notas de voz no llevan texto complementario, lo dejamos vacío
             texto = ""; 
         } else if (!texto) {
-            texto = "[Archivo o mensaje interactivo recibido]";
+            texto = "[Archivo o mensaje interactivo]";
         }
 
-        // Si se detectó multimedia, lo descargamos del servidor de Meta y lo subimos a tu Storage
         if (mediaType) {
             try {
                 const { downloadMediaMessage } = require('@whiskeysockets/baileys');
@@ -387,7 +385,7 @@ async function connectToWhatsApp() {
                 
                 if (buffer) {
                     const crypto = require('crypto');
-                    const token = crypto.randomUUID(); // Token criptográfico nativo de Firebase
+                    const token = crypto.randomUUID(); 
                     let extension = 'bin';
                     let contentType = 'application/octet-stream';
                     
@@ -407,18 +405,20 @@ async function connectToWhatsApp() {
                         contentType: contentType
                     });
                     
-                    // Armamos la URL pública con el formato nativo compatible con el visualizador del frontend
                     mediaUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(nombreArchivo)}?alt=media&token=${token}`;
                 }
             } catch (err) {
-                console.error("Error procesando o subiendo multimedia entrante de WhatsApp:", err);
+                console.error("Error procesando multimedia de WhatsApp:", err);
             }
         }
         
-        await guardarMensajeBD(identificador, nombrePerfil, texto, 'in', remitenteEspecifico, mediaUrl, mediaType);
+        // 🚀 GUARDADO DINÁMICO: Pasamos la variable 'tipoMensaje' ('in' u 'out') a la base de datos
+        await guardarMensajeBD(identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType);
 
-        // 🚀 CONEXIÓN DEL BOT: Activamos el evaluador en la nube sobre la marcha
-        procesarBotEnNube(identificador, texto);
+        // 🚀 PROTECCIÓN DEL BOT: Solo activamos la automatización si el mensaje es ENTRANTE
+        if (tipoMensaje === 'in') {
+            procesarBotEnNube(identificador, texto);
+        }
 
         io.emit('nuevo-mensaje', { 
             numero: identificador, 
@@ -426,8 +426,9 @@ async function connectToWhatsApp() {
             texto: texto, 
             hora: new Date().toISOString(),
             remitente: remitenteEspecifico,
-            mediaUrl: mediaUrl, // 🚀 ENVIADO EN VIVO A LA WEB
-            mediaType: mediaType
+            mediaUrl: mediaUrl,
+            mediaType: mediaType,
+            tipo: tipoMensaje // 🚀 MANDAMOS EL TIPO AL FRONTEND PARA QUE LO DIBUJE A LA DERECHA
         });
     });
 
