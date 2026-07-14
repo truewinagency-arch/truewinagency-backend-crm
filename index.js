@@ -299,10 +299,22 @@ async function connectToWhatsApp() {
             // 2. 🌟 EL PARARRAYOS: Borramos el registro corrupto de Firestore
             // Reemplaza esto con tu lógica exacta de guardado (ej. borrar documento o vaciarlo)
             try {
-                const db = admin.firestore();
-                // Asumiendo una estructura estándar, ajusta tu colección/documento:
-                await db.collection('tu_coleccion_sesiones').doc('tu_documento_bot').delete();
-                console.log("[Firestore] Registro de sesión corrupto eliminado de la base de datos con éxito.");
+                console.log("[Firestore] Ejecutando purga total de la sesión corrupta...");
+                
+                // Usamos 'coleccionSesion' y 'db' que ya están definidos globalmente en tu index.js
+                const snapshot = await coleccionSesion.get();
+                
+                if (!snapshot.empty) {
+                    const batch = db.batch(); // Preparamos un borrado masivo
+                    snapshot.docs.forEach((doc) => {
+                        batch.delete(doc.ref);
+                    });
+                    
+                    await batch.commit(); // Ejecutamos el borrado de golpe
+                    console.log("[Firestore] Sesión antigua eliminada de la base de datos con éxito.");
+                } else {
+                    console.log("[Firestore] La colección ya estaba limpia.");
+                }
             } catch (fsError) {
                 console.error("[Firestore] Error al intentar borrar la sesión corrupta:", fsError.message);
             }
