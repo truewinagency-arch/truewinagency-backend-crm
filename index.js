@@ -558,8 +558,8 @@ app.post('/send-text', async (req, res) => {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        if (linkData) {
-            // 🚀 LLAMAMOS A LA FÁBRICA DE TARJETAS
+        if (linkData && linkData.url) {
+            // 🚀 Despacha la tarjeta perfecta
             await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData);
         } else {
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
@@ -835,56 +835,62 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
     let thumbnailBuffer = null;
 
+    // 🌟 REGLA 1: El enlace DEBE ser parte visible del texto de la burbuja.
+    let textoVisible = mensajeFinal || "";
+    if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
+        // Si no incluiste el link en el texto, lo concatenamos al final automáticamente
+        textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
+    }
+
     if (linkData && linkData.imageUrl) {
         try {
-            console.log(`[Tarjeta] Generando miniatura proporcional para: ${linkData.imageUrl}`);
-            const resImagen = await fetch(linkData.imageUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0' }
-            });
+            console.log(`[Tarjeta] Procesando miniatura para: ${linkData.imageUrl}`);
+            const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             
             if (resImagen.ok) {
-                const arrayBuffer = await resImagen.arrayBuffer();
-                const originalBuffer = Buffer.from(arrayBuffer);
-                
+                const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                 let calidad = 75;
                 
-                // 🌟 GEOMETRÍA NATIVA: Solo definimos el ancho (400px). 
-                // Sharp auto-calcula la altura para mantener tu proporción exacta sin bordes blancos.
+                // 🌟 REGLA 2: Límite estricto de 14 KB y Cero Bordes Blancos.
+                // Reducimos el ancho a 300px (sin forzar altura, para mantener tu proporción).
                 thumbnailBuffer = await sharp(originalBuffer)
-                    .resize({ width: 400, withoutEnlargement: true })
+                    .resize({ width: 300, withoutEnlargement: true })
                     .jpeg({ quality: calidad })
                     .toBuffer();
 
-                // Bucle de compresión estricto (< 45KB)
-                while (thumbnailBuffer.length > 45000 && calidad > 15) {
+                // Bucle de compresión extrema para evadir el borrado de Meta
+                while (thumbnailBuffer.length > 14000 && calidad > 10) {
                     calidad -= 10;
                     thumbnailBuffer = await sharp(originalBuffer)
-                        .resize({ width: 400, withoutEnlargement: true })
+                        .resize({ width: 300, withoutEnlargement: true })
                         .jpeg({ quality: calidad })
                         .toBuffer();
                 }
-                console.log(`[Tarjeta] Miniatura empacada. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                console.log(`[Tarjeta] Miniatura validada. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
             }
         } catch (e) {
-            console.warn("[Tarjeta] Fallo al generar la miniatura:", e.message);
+            console.warn("[Tarjeta] Fallo al generar miniatura:", e.message);
         }
     }
 
-    // Respaldo de supervivencia
+    // Respaldo base64
     if (!thumbnailBuffer) {
         thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
     }
 
+    // =================================================================
+    // 🚀 ENSAMBLAJE PROTOBUF EXACTO
+    // =================================================================
     const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
     const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
         extendedTextMessage: {
-            text: mensajeFinal,
+            text: textoVisible, // <-- Ahora contiene el link obligatorio
             matchedText: linkData.url,
             canonicalUrl: linkData.url,
-            title: linkData.title,
-            description: linkData.description,
-            jpegThumbnail: thumbnailBuffer // Geometría pura y nítida
+            title: linkData.title || "Enlace Oficial",
+            description: linkData.description || "",
+            jpegThumbnail: thumbnailBuffer // <-- Ahora pesa menos de 14 KB
         }
     }, { userJid: whatsappSock.user.id });
 
@@ -1033,8 +1039,9 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 }
             } else if (msj.tipo === 'audio' && msj.url) {
                 await whatsappSock.sendMessage(numeroDestino, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+            
+            // 🌟 AQUÍ EL BOT DESPACHA LAS SECUENCIAS CON METADATOS
             } else if (msj.tipo === 'enlace' && msj.linkData) {
-                // 🌟 AQUÍ EL BOT DESPACHA LA TARJETA METADATA
                 await enviarTarjetaEnlace(numeroDestino, textoBurbuja, msj.linkData);
             }
 
