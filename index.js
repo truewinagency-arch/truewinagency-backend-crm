@@ -494,7 +494,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (NITIDEZ ABSOLUTA - MÁXIMA RESOLUCIÓN)
+// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (COMPRESIÓN RECURSIVA & AUTO-BANNER)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -506,12 +506,12 @@ app.post('/send-text', async (req, res) => {
 
         if (linkData) {
             let thumbnailBuffer = null;
-            let realWidth = 0;
-            let realHeight = 0;
+            let finalWidth = 600;
+            let finalHeight = 314;
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Procesando imagen en Alta Resolución nativa: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Procesando imagen adaptativa: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
                     });
@@ -520,49 +520,75 @@ app.post('/send-text', async (req, res) => {
                         const arrayBuffer = await resImagen.arrayBuffer();
                         const image = await Jimp.read(Buffer.from(arrayBuffer));
                         
-                        // 🌟 1. PURIFICACIÓN Y MANTENIMIENTO DE LA PROPORCIÓN ORIGINAL
-                        image.background(0xFFFFFFFF); // Protege contra transparencias de PNGs
-                        
-                        // Escalamos a un ancho nítido de 800px manteniendo la proporción perfecta de tu diseño original.
-                        // Al no usar el CDN de Meta, nadie va a destruir ni encoger esta resolución.
-                        image.scaleToFit(800, 800);
-                        
-                        realWidth = image.bitmap.width;
-                        realHeight = image.bitmap.height;
+                        // Protegemos contra fondos transparentes de PNGs
+                        image.background(0xFFFFFFFF);
 
-                        // 🌟 2. MOTOR DE COMPRESIÓN DINÁMICA (Nitidez Inteligente)
-                        // Arrancamos con una calidad excelente (75%)
-                        image.quality(75); 
+                        const originalWidth = image.bitmap.width;
+                        const originalHeight = image.bitmap.height;
+                        const ratio = originalWidth / originalHeight;
+
+                        // 🌟 TRUCO GEOMÉTRICO: Forzamos la proporción Widescreen (1.91:1)
+                        // Si la imagen es cuadrada, vertical o exageradamente ancha, la metemos
+                        // dentro de un contenedor estándar de 600x314 para forzar el Banner Gigante de Meta.
+                        if (ratio < 1.4 || ratio > 2.2) {
+                            console.log(`[Backend] Proporción inusual (${ratio.toFixed(2)}:1). Adaptando a lienzo panorámico...`);
+                            image.contain(600, 314);
+                            finalWidth = 600;
+                            finalHeight = 314;
+                        } else {
+                            // Si ya es panorámica nativa, la escalamos a un ancho máximo óptimo de 800px
+                            if (originalWidth > 800) {
+                                image.scaleToFit(800, 800);
+                            }
+                            finalWidth = image.bitmap.width;
+                            finalHeight = image.bitmap.height;
+                        }
+
+                        // 🌟 BUCLE RECURSIVO DE COMPRESIÓN (Garantía de supervivencia del Socket)
+                        let calidadActual = 75;
+                        let escalaActual = 1.0;
                         let bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
-                        
-                        // Si el archivo se pasa del límite estricto de Meta (~60KB), bajamos la calidad 
-                        // gradualmente, pero MANTENEMOS los 800px de resolución intactos para evitar el pixelado.
-                        if (bufferProcesado.length > 60000) {
-                            image.quality(55);
-                            bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        let intentos = 0;
+
+                        // Si el búfer supera los 55KB, reducimos agresivamente la calidad y el tamaño
+                        // hasta que sea 100% seguro para los servidores de Meta.
+                        while (bufferProcesado.length > 55000 && intentos < 10) {
+                            intentos++;
+                            if (calidadActual > 30) {
+                                calidadActual -= 10;
+                            } else {
+                                escalaActual *= 0.8;
+                            }
+
+                            const copiaTemporal = image.clone();
+                            if (escalaActual < 1.0) {
+                                copiaTemporal.resize(Math.round(finalWidth * escalaActual), Jimp.AUTO);
+                            }
+                            copiaTemporal.quality(calidadActual);
+                            
+                            bufferProcesado = await copiaTemporal.getBufferAsync(Jimp.MIME_JPEG);
+                            
+                            finalWidth = copiaTemporal.bitmap.width;
+                            finalHeight = copiaTemporal.bitmap.height;
                         }
-                        if (bufferProcesado.length > 60000) {
-                            image.quality(40);
-                            bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
-                        }
-                        
+
                         thumbnailBuffer = bufferProcesado;
-                        console.log(`[Backend] Búfer HD generado. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB. Proporción: ${realWidth}x${realHeight}`);
+                        console.log(`[Backend] Búfer HD estabilizado. Peso final: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB. Dimensiones: ${finalWidth}x${finalHeight}`);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo en el motor de renderizado HD. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo en el motor geométrico. Usando respaldo de emergencia.", e.message);
                 }
             }
 
-            // Búfer de supervivencia si ocurre un error de red
+            // Búfer de supervivencia si todo falla (Micropíxel JPEG)
             if (!thumbnailBuffer) {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
-                realWidth = 300;
-                realHeight = 200;
+                finalWidth = 300;
+                finalHeight = 200;
             }
 
             // =================================================================
-            // 🚀 3. ENSAMBLAJE PROTOBUF DIRECTO (MÁXIMA CALIDAD)
+            // 🚀 ENSAMBLAJE PROTOBUF DIRECTO (MÁXIMA ESTABILIDAD)
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
@@ -572,20 +598,20 @@ app.post('/send-text', async (req, res) => {
                 canonicalUrl: linkData.url,
                 title: linkData.title,
                 description: linkData.description,
-                jpegThumbnail: thumbnailBuffer, // El búfer nítido inyectado directamente en el paquete
-                thumbnailWidth: realWidth,      // Le indicamos al teléfono las dimensiones exactas
-                thumbnailHeight: realHeight
+                jpegThumbnail: thumbnailBuffer, 
+                thumbnailWidth: finalWidth,      // Le indica al teléfono el tamaño panorámico
+                thumbnailHeight: finalHeight
             };
 
             const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
                 extendedTextMessage: payloadExtended
             }, { userJid: whatsappSock.user.id });
 
-            // Enviamos el paquete binario directo al túnel sin filtros destructivos
+            // Enviamos directo al túnel sin procesadores tradicionales
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
-            // Sin metadatos, envío de texto plano tradicional
+            // Sin metadatos, envío plano tradicional
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
         
