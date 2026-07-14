@@ -1030,7 +1030,42 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
 
             // 🚀 DISPARO CORREGIDO: Integración del Motor de Tarjetas
             if (msj.tipo === 'texto') {
-                await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
+                // 1. Escaneamos si el texto de tu plantilla contiene alguna URL
+                const urlRegex = /(https?:\/\/[^\s]+)/g;
+                const urls = textoBurbuja.match(urlRegex);
+
+                if (urls && urls.length > 0) {
+                    console.log(`[Bot Nube] Enlace detectado en la secuencia. Extrayendo metadatos de: ${urls[0]}`);
+                    try {
+                        // Usamos la herramienta nativa de Baileys para leer la web destino
+                        const { getUrlInfo } = require('@whiskeysockets/baileys');
+                        const linkInfo = await getUrlInfo(urls[0]); 
+                        
+                        // 🌟 REGLA DE SUPERVIVENCIA META (< 14KB)
+                        // Si la web de destino tiene una portada muy pesada, Meta la censurará.
+                        // La interceptamos y la aplastamos con Sharp para garantizar la entrega.
+                        if (linkInfo && linkInfo.jpegThumbnail && linkInfo.jpegThumbnail.length > 14000) {
+                            linkInfo.jpegThumbnail = await sharp(linkInfo.jpegThumbnail)
+                                .resize({ width: 300, withoutEnlargement: true })
+                                .jpeg({ quality: 60 })
+                                .toBuffer();
+                        }
+
+                        // Enviamos la tarjeta perfectamente armada
+                        await whatsappSock.sendMessage(numeroDestino, { 
+                            text: textoBurbuja, 
+                            ...linkInfo 
+                        });
+                    } catch (e) {
+                        console.warn("[Bot Nube] Falló la extracción web, enviando texto plano.", e.message);
+                        await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
+                    }
+                } else {
+                    // Si es un texto normal sin links, se envía normal
+                    await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
+                }
+
+            // Los demás tipos de mensajes se quedan idénticos
             } else if (msj.tipo === 'media' && msj.url) {
                 if (mType === 'video') {
                     await whatsappSock.sendMessage(numeroDestino, { video: { url: msj.url }, caption: textoBurbuja });
@@ -1039,10 +1074,6 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 }
             } else if (msj.tipo === 'audio' && msj.url) {
                 await whatsappSock.sendMessage(numeroDestino, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
-            
-            // 🌟 AQUÍ EL BOT DESPACHA LAS SECUENCIAS CON METADATOS
-            } else if (msj.tipo === 'enlace' && msj.linkData) {
-                await enviarTarjetaEnlace(numeroDestino, textoBurbuja, msj.linkData);
             }
 
             // Apagamos estado de presencia
