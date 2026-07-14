@@ -494,88 +494,75 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (ANTI-COLAPSO 408)
+// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (NITIDEZ ABSOLUTA - MÁXIMA RESOLUCIÓN)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
     
-    // 🚀 SALVAVIDAS ANTI-408: Le da tiempo al servidor de responderle a WhatsApp
-    const respirar = () => new Promise(resolve => setTimeout(resolve, 50));
-
     try {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
         if (linkData) {
             let thumbnailBuffer = null;
-            let hqImageMsg = null;
             let realWidth = 0;
             let realHeight = 0;
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Descargando imagen original: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Procesando imagen en Alta Resolución nativa: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
                     });
                     
                     if (resImagen.ok) {
                         const arrayBuffer = await resImagen.arrayBuffer();
-                        await respirar(); // Tomamos aire antes de dársela a Jimp
-                        
                         const image = await Jimp.read(Buffer.from(arrayBuffer));
-                        await respirar(); // Tomamos aire tras leerla
-
-                        image.background(0xFFFFFFFF); 
                         
-                        // 🚀 PREVENCIÓN DE CONGELAMIENTO:
-                        // Si la imagen de tu web es un monstruo 4K, la reducimos a 800px (HD Celular).
-                        // Sigue siendo panorámica, sigue siendo de altísima calidad, pero no tumba el servidor.
-                        if (image.bitmap.width > 800 || image.bitmap.height > 800) {
-                            image.scaleToFit(800, 800);
-                        }
+                        // 🌟 1. PURIFICACIÓN Y MANTENIMIENTO DE LA PROPORCIÓN ORIGINAL
+                        image.background(0xFFFFFFFF); // Protege contra transparencias de PNGs
                         
-                        // Guardamos las medidas reales HD para el Banner
+                        // Escalamos a un ancho nítido de 800px manteniendo la proporción perfecta de tu diseño original.
+                        // Al no usar el CDN de Meta, nadie va a destruir ni encoger esta resolución.
+                        image.scaleToFit(800, 800);
+                        
                         realWidth = image.bitmap.width;
                         realHeight = image.bitmap.height;
-                        await respirar(); // Tomamos aire tras escalar
 
-                        // 1. SUBIMOS EL BÚFER HD AL CDN DE META
-                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
-                        await respirar();
-
-                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
-                        const mediaUpload = await prepareWAMessageMedia(
-                            { image: bufferHQ },
-                            { upload: whatsappSock.waUploadToServer }
-                        );
-                        hqImageMsg = mediaUpload.imageMessage;
-                        console.log("[Backend] Imagen HQ subida al CDN de Meta exitosamente.");
-
-                        // 2. CREAMOS LA MINIATURA DE CARGA RÁPIDA (Sin deformar, anti-pixelado)
-                        const thumbImage = image.clone();
-                        thumbImage.scaleToFit(300, 300).quality(60); 
-                        let bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
+                        // 🌟 2. MOTOR DE COMPRESIÓN DINÁMICA (Nitidez Inteligente)
+                        // Arrancamos con una calidad excelente (75%)
+                        image.quality(75); 
+                        let bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
                         
-                        if (bufferProcesado.length < 64000) {
-                            thumbnailBuffer = bufferProcesado;
-                        } else {
-                            thumbImage.quality(35);
-                            thumbnailBuffer = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
+                        // Si el archivo se pasa del límite estricto de Meta (~60KB), bajamos la calidad 
+                        // gradualmente, pero MANTENEMOS los 800px de resolución intactos para evitar el pixelado.
+                        if (bufferProcesado.length > 60000) {
+                            image.quality(55);
+                            bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
                         }
+                        if (bufferProcesado.length > 60000) {
+                            image.quality(40);
+                            bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        }
+                        
+                        thumbnailBuffer = bufferProcesado;
+                        console.log(`[Backend] Búfer HD generado. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB. Proporción: ${realWidth}x${realHeight}`);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo en el motor HD. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo en el motor de renderizado HD. Usando respaldo.", e.message);
                 }
             }
 
+            // Búfer de supervivencia si ocurre un error de red
             if (!thumbnailBuffer) {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
+                realWidth = 300;
+                realHeight = 200;
             }
 
             // =================================================================
-            // 🚀 3. ENSAMBLAJE PROTOBUF NATIVO
+            // 🚀 3. ENSAMBLAJE PROTOBUF DIRECTO (MÁXIMA CALIDAD)
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
@@ -585,35 +572,27 @@ app.post('/send-text', async (req, res) => {
                 canonicalUrl: linkData.url,
                 title: linkData.title,
                 description: linkData.description,
-                jpegThumbnail: thumbnailBuffer
+                jpegThumbnail: thumbnailBuffer, // El búfer nítido inyectado directamente en el paquete
+                thumbnailWidth: realWidth,      // Le indicamos al teléfono las dimensiones exactas
+                thumbnailHeight: realHeight
             };
-
-            // Inyectamos las llaves de la nube y las proporciones HD
-            if (hqImageMsg) {
-                payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
-                payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
-                payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
-                payloadExtended.mediaKey = hqImageMsg.mediaKey;
-                payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
-                
-                payloadExtended.thumbnailHeight = realHeight;
-                payloadExtended.thumbnailWidth = realWidth;
-            }
 
             const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
                 extendedTextMessage: payloadExtended
             }, { userJid: whatsappSock.user.id });
 
+            // Enviamos el paquete binario directo al túnel sin filtros destructivos
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
+            // Sin metadatos, envío de texto plano tradicional
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
-
+        
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con Protobuf:", error);
+        console.error("Fallo al enviar texto manual con Protobuf HD:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
