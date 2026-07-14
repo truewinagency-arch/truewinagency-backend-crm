@@ -546,8 +546,9 @@ app.get('/status', (req, res) => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: EL MOTOR HÍBRIDO (SHARP + JIMP) 100% ESTABLE
+// 🌐 ENDPOINT MANUAL: BANNER HD CRISTALINO (SIN CDN - RECTÁNGULO PURO)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -559,94 +560,76 @@ app.post('/send-text', async (req, res) => {
 
         if (linkData) {
             let thumbnailBuffer = null;
-            let hqImageMsg = null;
+            const targetWidth = 600;
+            const targetHeight = 314; // 🌟 Proporción mágica 1.91:1 que activa el Banner Gigante
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Motor Híbrido procesando: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Creando Lienzo Rectangular HD para: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0' }
                     });
                     
                     if (resImagen.ok) {
-                        const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
+                        const arrayBuffer = await resImagen.arrayBuffer();
+                        const originalBuffer = Buffer.from(arrayBuffer);
                         
-                        // 🌟 1. EL MÚSCULO (SHARP): Preprocesado ultra rápido anti-colapsos.
-                        // Hacemos el fondo blanco y redimensionamos a 800px aquí mismo.
-                        const bufferPreHQ = await sharp(originalBuffer)
-                            .resize({ width: 800, height: 800, fit: 'inside' })
-                            .flatten({ background: { r: 255, g: 255, b: 255 } })
-                            .png()
+                        // 🌟 EL TRUCO GEOMÉTRICO DEFINITIVO:
+                        // Forzamos a Sharp a encajar cualquier imagen dentro de un molde de 600x314.
+                        // Si tu portada es cuadrada (1x1), le añade bordes blancos limpios a los lados sin estirarla.
+                        // Al recibir un rectángulo nativo, WhatsApp activa el Banner Grande de forma obligatoria.
+                        let calidad = 75;
+                        thumbnailBuffer = await sharp(originalBuffer)
+                            .resize(targetWidth, targetHeight, {
+                                fit: 'contain',
+                                background: { r: 255, g: 255, b: 255 }
+                            })
+                            .jpeg({ quality: calidad })
                             .toBuffer();
 
-                        // 🌟 2. EL TRADUCTOR (JIMP v1.6+): Formato JFIF estricto para WhatsApp
-                        const { Jimp } = require('jimp'); // 🚀 IMPORTACIÓN CORREGIDA PARA V1.6+
-                        const imageHQ = await Jimp.read(bufferPreHQ);
-                        
-                        // 🚀 SINTAXIS ACTUALIZADA: getBuffer en vez de getBufferAsync
-                        const bufferHQ = await imageHQ.getBuffer('image/jpeg', { quality: 85 });
-                        
-                        // 🌟 3. SUBIDA AL CDN DE META (Fuerza el Banner Grande)
-                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
-                        const mediaUpload = await prepareWAMessageMedia(
-                            { image: bufferHQ },
-                            { upload: whatsappSock.waUploadToServer }
-                        );
-                        hqImageMsg = mediaUpload.imageMessage;
-                        console.log("[Backend] Llaves CDN generadas.");
-
-                        // 🌟 4. LA MINIATURA HD (< 45KB) 
-                        // Sharp hace el cálculo matemático de redimensionar (Mucho más rápido)
-                        const bufferThumbPre = await sharp(originalBuffer)
-                            .resize({ width: 500, height: 500, fit: 'inside' })
-                            .flatten({ background: { r: 255, g: 255, b: 255 } })
-                            .png()
-                            .toBuffer();
-
-                        const imageThumb = await Jimp.read(bufferThumbPre);
-                        let calidad = 65;
-                        
-                        // Generamos el primer intento de miniatura en JFIF antiguo
-                        thumbnailBuffer = await imageThumb.getBuffer('image/jpeg', { quality: calidad });
-                        
-                        // Bucle estricto para no pasar de los 45KB permitidos por Meta
-                        while (thumbnailBuffer.length > 45000 && calidad > 20) {
+                        // Bucle súper sónico de seguridad anti-colapsos
+                        while (thumbnailBuffer.length > 50000 && calidad > 20) {
                             calidad -= 10;
-                            // En V1.6, la calidad se pasa como parámetro dentro del getBuffer
-                            thumbnailBuffer = await imageThumb.getBuffer('image/jpeg', { quality: calidad });
+                            thumbnailBuffer = await sharp(originalBuffer)
+                                .resize(targetWidth, targetHeight, {
+                                    fit: 'contain',
+                                    background: { r: 255, g: 255, b: 255 }
+                                })
+                                .jpeg({ quality: calidad })
+                                .toBuffer();
                         }
-                        console.log(`[Backend] Miniatura Híbrida lista. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                        
+                        console.log(`[Backend] Banner HD empaquetado. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo en motor híbrido. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo al generar el banner con Sharp:", e.message);
                 }
             }
 
+            // Respaldo de supervivencia
             if (!thumbnailBuffer) {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
             }
 
             // =================================================================
-            // 🚀 5. ENSAMBLAJE PROTOBUF LIMPIO (SIN INYECTAR LLAVES CDN)
+            // 🚀 ENSAMBLAJE PROTOBUF NATIVO (ENTREGA 100% GARANTIZADA - DOBLE CHECK)
             // =================================================================
-           const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
-
-            const payloadExtended = {
-                text: mensajeFinal,
-                matchedText: linkData.url,
-                canonicalUrl: linkData.url,
-                title: linkData.title,
-                description: linkData.description,
-                jpegThumbnail: thumbnailBuffer // El búfer JFIF de Jimp < 15KB se lee directo aquí
-            };
-
-            // ⚠️ ELIMINAMOS COMPLETAMENTE EL BLOQUE "if (hqImageMsg) { ... }"
-            // Al no pasarle rutas MMS falsas, el celular no se confunde y renderiza la miniatura.
+            const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
             const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-                extendedTextMessage: payloadExtended
+                extendedTextMessage: {
+                    text: mensajeFinal,
+                    matchedText: linkData.url,
+                    canonicalUrl: linkData.url,
+                    title: linkData.title,
+                    description: linkData.description,
+                    jpegThumbnail: thumbnailBuffer, // Contiene el rectángulo nítido procesado
+                    thumbnailWidth: targetWidth,     // Confirmamos las dimensiones panorámicas exactas
+                    thumbnailHeight: targetHeight
+                }
             }, { userJid: whatsappSock.user.id });
 
+            // Enviamos directo al socket sin pasar por la nube de Meta
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
@@ -656,7 +639,7 @@ app.post('/send-text', async (req, res) => {
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con Protobuf:", error);
+        console.error("Fallo al enviar texto manual con Banner HD:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
