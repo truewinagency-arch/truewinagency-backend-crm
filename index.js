@@ -287,22 +287,30 @@ async function connectToWhatsApp() {
 
             // 🚀 CORRECCIÓN DEFINITIVA: Destrucción por Falla de Conexión / Sesión Inválida (405 y 401)
             if (codigoError === 405 || codigoError === 401) {
-                console.error(`[🚨 ALERTA ${codigoError}] Credenciales corruptas o inválidas en caché. Purgando RAM para generar QR limpio.`);
-                io.emit('estado-conexion', 'desconectado'); 
-                whatsappSock = null; 
-                
-                // Vaciamos la caché rápida en memoria para que no arrastre datos viejos
-                cacheCreds = {}; 
-                cacheKeys = {}; 
-                cacheCargada = false;
+            console.error(`[🚨 ALERTA ${codigoError}] Credenciales corruptas. Purgando RAM y Firebase.`);
+            io.emit('estado-conexion', 'desconectado'); 
+            whatsappSock = null; 
+            
+            // 1. Limpiamos la RAM
+            cacheCreds = {}; 
+            cacheKeys = {}; 
+            cacheCargada = false;
 
-                // Si manejas almacenamiento persistente en disco o base de datos que alimente 
-                // tu caché rápida, este es el lugar para borrar o limpiar ese registro físico.
-
-                console.log("[TrueWin] Inicializando flujo limpio desde cero en 4 segundos...");
-                setTimeout(() => connectToWhatsApp(), 4000);
-                return; // Cortamos la ejecución para que no ejecute el flujo de abajo
+            // 2. 🌟 EL PARARRAYOS: Borramos el registro corrupto de Firestore
+            // Reemplaza esto con tu lógica exacta de guardado (ej. borrar documento o vaciarlo)
+            try {
+                const db = admin.firestore();
+                // Asumiendo una estructura estándar, ajusta tu colección/documento:
+                await db.collection('tu_coleccion_sesiones').doc('tu_documento_bot').delete();
+                console.log("[Firestore] Registro de sesión corrupto eliminado de la base de datos con éxito.");
+            } catch (fsError) {
+                console.error("[Firestore] Error al intentar borrar la sesión corrupta:", fsError.message);
             }
+
+            console.log("[TrueWin] Inicializando flujo limpio desde cero en 4 segundos...");
+            setTimeout(() => connectToWhatsApp(), 4000);
+            return;
+        }
 
             // 🚀 CORRECCIÓN: Destrucción Total ante Baneo (403)
             if (codigoError === 403 || codigoError === DisconnectReason.forbidden) {
