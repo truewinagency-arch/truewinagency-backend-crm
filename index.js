@@ -30,6 +30,7 @@ const coleccionSesion = db.collection('crm_whatsapp_session');
 const coleccionMensajes = db.collection('crm_mensajes');
 const coleccionPlantillas = db.collection('crm_plantillas'); // 🚀 NUEVA BASE PARA PLANTILL
 
+const Jimp = require('jimp');
 const sharp = require('sharp');
 // 🚀 DETECTOR DEL NÚMERO CONECTADO ACTUALMENTE AL SERVIDOR
 function getHostNumber() {
