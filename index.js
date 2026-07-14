@@ -30,7 +30,7 @@ const coleccionSesion = db.collection('crm_whatsapp_session');
 const coleccionMensajes = db.collection('crm_mensajes');
 const coleccionPlantillas = db.collection('crm_plantillas'); // 🚀 NUEVA BASE PARA PLANTILL
 
-const Jimp = require('jimp');
+const sharp = require('sharp');
 // 🚀 DETECTOR DEL NÚMERO CONECTADO ACTUALMENTE AL SERVIDOR
 function getHostNumber() {
     if (whatsappSock && whatsappSock.user && whatsappSock.user.id) {
@@ -494,14 +494,11 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: HD LINK PREVIEWS (VERSIÓN DEFINITIVA CURADA)
+// 🌐 ENDPOINT MANUAL: HD PREVIEWS CON MOTOR SHARP (C++ MULTITHREAD)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
-    
-    // Le damos respiros a tu servidor Render para que Meta no lo desconecte
-    const respirar = () => new Promise(resolve => setTimeout(resolve, 50));
 
     try {
         const mensajeFinal = procesarSpintax(mensaje);
@@ -515,34 +512,30 @@ app.post('/send-text', async (req, res) => {
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Procesando imagen localmente: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Sharp procesando en C++: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0' }
                     });
                     
                     if (resImagen.ok) {
                         const arrayBuffer = await resImagen.arrayBuffer();
-                        await respirar();
+                        const originalBuffer = Buffer.from(arrayBuffer);
                         
-                        const image = await Jimp.read(Buffer.from(arrayBuffer));
-                        await respirar();
-                        image.background(0xFFFFFFFF); 
-                        
-                        // 🌟 1. PREPARAR EL BANNER HD PARA LA NUBE DE META
-                        // Si la imagen es masiva, la bajamos a 800px para que tu CPU no explote.
-                        // Esto mantiene la forma (rectangular o cuadrada) intacta.
-                        if (image.bitmap.width > 800 || image.bitmap.height > 800) {
-                            image.scaleToFit(800, 800);
-                        }
-                        
-                        realWidth = image.bitmap.width;
-                        realHeight = image.bitmap.height;
-                        await respirar();
+                        // 🌟 1. EL BÚFER HD PARA LA NUBE DE META (Ultrarrápido)
+                        // fit: 'inside' reduce la imagen a max 800px manteniendo la proporción perfecta.
+                        // flatten() asegura que si es PNG, el fondo transparente se vuelva blanco.
+                        const bufferHQ = await sharp(originalBuffer)
+                            .resize({ width: 800, height: 800, fit: 'inside' })
+                            .flatten({ background: { r: 255, g: 255, b: 255 } })
+                            .jpeg({ quality: 85 })
+                            .toBuffer();
 
-                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
-                        await respirar();
+                        // Extraemos la geometría exacta resultante para inyectarla en el mensaje
+                        const metadata = await sharp(bufferHQ).metadata();
+                        realWidth = metadata.width;
+                        realHeight = metadata.height;
 
-                        // Subimos la imagen nítida al CDN de Meta (Esto activa la tarjeta grande)
+                        // Subimos la imagen HQ a Meta
                         const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
                         const mediaUpload = await prepareWAMessageMedia(
                             { image: bufferHQ },
@@ -551,31 +544,33 @@ app.post('/send-text', async (req, res) => {
                         hqImageMsg = mediaUpload.imageMessage;
                         console.log("[Backend] Imagen HD subida al CDN con éxito.");
 
-                        // 🌟 2. LA CURA DEL PIXELADO Y EL CRASH (La Miniatura)
-                        const thumbImage = image.clone();
-                        
-                        // Usamos resize(400, Jimp.AUTO) en vez de cover(300, 300).
-                        // Mantiene la proporción original exacta de tu diseño sin estirarlo.
-                        thumbImage.resize(400, Jimp.AUTO);
-                        
+                        // 🌟 2. LA MINIATURA HD (< 45KB) ANTI-EPIPE
                         let calidad = 75;
-                        thumbnailBuffer = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
                         
-                        // 🌟 3. EL BLINDAJE ANTI-EPIPE (Crash de Socket)
-                        // WhatsApp corta el cable si pasamos de 60KB. Lo forzamos a < 45KB.
+                        // Primer intento de miniatura
+                        thumbnailBuffer = await sharp(originalBuffer)
+                            .resize({ width: 600, height: 600, fit: 'inside' })
+                            .flatten({ background: { r: 255, g: 255, b: 255 } })
+                            .jpeg({ quality: calidad })
+                            .toBuffer();
+                        
+                        // Bucle súper sónico en C++ para bajar de 45KB si hace falta
                         while (thumbnailBuffer.length > 45000 && calidad > 20) {
                             calidad -= 10;
-                            thumbImage.quality(calidad);
-                            thumbnailBuffer = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
+                            thumbnailBuffer = await sharp(originalBuffer)
+                                .resize({ width: 600, height: 600, fit: 'inside' })
+                                .flatten({ background: { r: 255, g: 255, b: 255 } })
+                                .jpeg({ quality: calidad })
+                                .toBuffer();
                         }
                         console.log(`[Backend] Miniatura HD generada. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo en el motor de renderizado. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo en el motor Sharp. Usando respaldo.", e.message);
                 }
             }
 
-            // Respaldo de supervivencia si ocurre un error
+            // Respaldo de supervivencia si ocurre un error (Pixel blanco)
             if (!thumbnailBuffer) {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
                 realWidth = 300;
@@ -583,7 +578,7 @@ app.post('/send-text', async (req, res) => {
             }
 
             // =================================================================
-            // 🚀 ENSAMBLAJE PROTOBUF NATIVO
+            // 🚀 3. ENSAMBLAJE PROTOBUF NATIVO
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
@@ -593,10 +588,10 @@ app.post('/send-text', async (req, res) => {
                 canonicalUrl: linkData.url,
                 title: linkData.title,
                 description: linkData.description,
-                jpegThumbnail: thumbnailBuffer 
+                jpegThumbnail: thumbnailBuffer // La miniatura proporcionada y súper nítida
             };
 
-            // Inyectamos las llaves de la nube y las dimensiones exactas
+            // Inyectamos las llaves de la nube y las proporciones HD
             if (hqImageMsg) {
                 payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
                 payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
@@ -612,7 +607,7 @@ app.post('/send-text', async (req, res) => {
                 extendedTextMessage: payloadExtended
             }, { userJid: whatsappSock.user.id });
 
-            // Envío directo sin chocar con los filtros de negocio
+            // Envío al túnel
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
