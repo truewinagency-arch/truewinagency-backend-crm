@@ -493,53 +493,73 @@ app.get('/status', (req, res) => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// =====================================================================
-// 🌐 ENDPOINT MANUAL: HD BANNERS (EXTERNAL AD REPLY + COMPRESIÓN SEGURA)
-// =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
     
+    // 🚀 SALVAVIDAS ANTI-408 (Tu solución para evitar cierres de conexión)
+    const respirar = () => new Promise(resolve => setTimeout(resolve, 50));
+
     try {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
         if (linkData) {
             let thumbnailBuffer = null;
+            let hqImageMsg = null; 
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Procesando lienzo HD para Banner: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Descargando imagen original: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0' }
                     });
                     
                     if (resImagen.ok) {
                         const arrayBuffer = await resImagen.arrayBuffer();
+                        await respirar(); 
+                        
                         const image = await Jimp.read(Buffer.from(arrayBuffer));
+                        await respirar(); 
+                        image.background(0xFFFFFFFF); 
                         
-                        // 🌟 1. EL LIENZO PERFECTO DE META (1.91:1)
-                        // Limpiamos transparencias y encajamos tu foto (sea cuadrada o larga)
-                        // en el molde exacto que WhatsApp exige para el Banner Gigante.
-                        image.background(0xFFFFFFFF).contain(600, 314);
+                        // 1. SUBIMOS EL BÚFER AL CDN DE META (El truco para el layout grande)
+                        // No lo escalamos aquí, subimos el original para que Meta detecte proporciones reales.
+                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        await respirar();
 
-                        // 🌟 2. BUCLE ANTI-COLAPSOS (Límite blindado de 45 KB)
-                        let calidad = 85; // Arrancamos con una calidad altísima
-                        let bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+                        const mediaUpload = await prepareWAMessageMedia(
+                            { image: bufferHQ },
+                            { upload: whatsappSock.waUploadToServer }
+                        );
+                        hqImageMsg = mediaUpload.imageMessage;
+                        console.log("[Backend] Llaves CDN generadas exitosamente.");
+
+                        // =================================================================
+                        // 🚀 2. LA CURA AL PIXELADO: MINIATURA HD (< 60KB)
+                        // =================================================================
+                        const thumbImage = image.clone();
                         
-                        // Si pesa más de 45KB (el límite de seguridad de Baileys), bajamos la calidad
-                        // en saltos de 10. La resolución (600x314) se mantiene INTACTA, evitando el pixelado.
-                        while (bufferProcesado.length > 45000 && calidad > 20) {
+                        // Usamos scaleToFit en vez de cover. 
+                        // Mantiene la forma original de tu imagen sin recortarla, y le da 
+                        // más de 600px de ancho (HD para celulares).
+                        thumbImage.scaleToFit(640, 640); 
+                        
+                        let calidad = 70;
+                        let bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
+                        
+                        // Bucle de compresión de seguridad para evitar Error EPIPE
+                        while (bufferProcesado.length > 60000 && calidad > 20) {
                             calidad -= 10;
-                            image.quality(calidad);
-                            bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                            thumbImage.quality(calidad);
+                            bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
                         }
-                        
                         thumbnailBuffer = bufferProcesado;
-                        console.log(`[Backend] Banner generado. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB. Calidad: ${calidad}%`);
+                        console.log(`[Backend] Miniatura HD generada. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Error en motor gráfico. Usando emergencia.", e.message);
+                    console.warn("[Backend] Fallo en el motor de renderizado. Usando respaldo.", e.message);
                 }
             }
 
@@ -548,32 +568,46 @@ app.post('/send-text', async (req, res) => {
             }
 
             // =================================================================
-            // 🚀 3. EL ENVÍO PERFECTO (Doble Check Garantizado + Banner Grande)
+            // 🚀 3. ENSAMBLAJE PROTOBUF NATIVO
             // =================================================================
-            await whatsappSock.sendMessage(jidReal, {
+            const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
+
+            const payloadExtended = {
                 text: mensajeFinal,
-                contextInfo: {
-                    externalAdReply: {
-                        title: linkData.title,
-                        body: linkData.description,
-                        mediaType: 1, // 1 = Imagen
-                        thumbnail: thumbnailBuffer, // Pasamos SOLO el búfer seguro (Sin thumbnailUrl)
-                        sourceUrl: linkData.url, 
-                        renderLargerThumbnail: true, // La orden estricta de "Hazlo Gigante"
-                        showAdAttribution: false 
-                    }
-                }
-            });
+                matchedText: linkData.url,
+                canonicalUrl: linkData.url,
+                title: linkData.title,
+                description: linkData.description,
+                jpegThumbnail: thumbnailBuffer // Esta es la imagen HD real que verá el cliente
+            };
+
+            // Inyectamos las llaves de la nube para forzar la expansión de la tarjeta
+            if (hqImageMsg) {
+                payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
+                payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
+                payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
+                payloadExtended.mediaKey = hqImageMsg.mediaKey;
+                payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+                
+                payloadExtended.thumbnailHeight = hqImageMsg.height;
+                payloadExtended.thumbnailWidth = hqImageMsg.width;
+            }
+
+            const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
+                extendedTextMessage: payloadExtended
+            }, { userJid: whatsappSock.user.id });
+
+            // Doble check garantizado
+            await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
-            // Envío normal sin links
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
-        
+
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual:", error);
+        console.error("Fallo al enviar texto manual con Protobuf:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
