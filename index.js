@@ -493,12 +493,12 @@ app.get('/status', (req, res) => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// =====================================================================
+// 🌐 ENDPOINT MANUAL: ALTA DEFINICIÓN NATIVA (ANTI-BLOQUEO CPU)
+// =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
-    
-    // 🚀 SALVAVIDAS ANTI-408 (Tu solución para evitar cierres de conexión)
-    const respirar = () => new Promise(resolve => setTimeout(resolve, 50));
 
     try {
         const mensajeFinal = procesarSpintax(mensaje);
@@ -517,17 +517,24 @@ app.post('/send-text', async (req, res) => {
                     
                     if (resImagen.ok) {
                         const arrayBuffer = await resImagen.arrayBuffer();
-                        await respirar(); 
                         
+                        // 1. LEEMOS LA IMAGEN
                         const image = await Jimp.read(Buffer.from(arrayBuffer));
-                        await respirar(); 
                         image.background(0xFFFFFFFF); 
                         
-                        // 1. SUBIMOS EL BÚFER AL CDN DE META (El truco para el layout grande)
-                        // No lo escalamos aquí, subimos el original para que Meta detecte proporciones reales.
-                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
-                        await respirar();
+                        // 🚀 LA CURA CONTRA EL ERROR 428 (Connection Terminated)
+                        // Si la imagen original de Firebase es gigante, el encriptador de WhatsApp
+                        // bloquea el procesador causando la desconexión. 
+                        // Reducimos el original a un máximo de 900px ANTES de encriptar.
+                        // Sigue siendo HD altísimo para celulares, pero no tumba tu servidor.
+                        if (image.bitmap.width > 900 || image.bitmap.height > 900) {
+                            image.scaleToFit(900, 900);
+                        }
 
+                        // 2. EXTRAEMOS EL BÚFER HD (Ahora súper ligero para la CPU)
+                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
+
+                        // 3. SUBIMOS AL CDN DE META (Pasará rapidísimo sin congelar el socket)
                         const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
                         const mediaUpload = await prepareWAMessageMedia(
                             { image: bufferHQ },
@@ -537,20 +544,19 @@ app.post('/send-text', async (req, res) => {
                         console.log("[Backend] Llaves CDN generadas exitosamente.");
 
                         // =================================================================
-                        // 🚀 2. LA CURA AL PIXELADO: MINIATURA HD (< 60KB)
+                        // 🚀 4. LA MINIATURA HD (< 60KB) SIN DEFORMAR
                         // =================================================================
                         const thumbImage = image.clone();
                         
-                        // Usamos scaleToFit en vez de cover. 
-                        // Mantiene la forma original de tu imagen sin recortarla, y le da 
-                        // más de 600px de ancho (HD para celulares).
-                        thumbImage.scaleToFit(640, 640); 
+                        // Usamos scaleToFit para mantener la forma geométrica de tu foto original
+                        // sin estirarla, y le damos 600px de ancho (HD para pantallas pequeñas).
+                        thumbImage.scaleToFit(600, 600); 
                         
                         let calidad = 70;
                         let bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
                         
                         // Bucle de compresión de seguridad para evitar Error EPIPE
-                        while (bufferProcesado.length > 60000 && calidad > 20) {
+                        while (bufferProcesado.length > 55000 && calidad > 20) {
                             calidad -= 10;
                             thumbImage.quality(calidad);
                             bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
@@ -568,7 +574,7 @@ app.post('/send-text', async (req, res) => {
             }
 
             // =================================================================
-            // 🚀 3. ENSAMBLAJE PROTOBUF NATIVO
+            // 🚀 5. ENSAMBLAJE PROTOBUF NATIVO
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
@@ -578,10 +584,10 @@ app.post('/send-text', async (req, res) => {
                 canonicalUrl: linkData.url,
                 title: linkData.title,
                 description: linkData.description,
-                jpegThumbnail: thumbnailBuffer // Esta es la imagen HD real que verá el cliente
+                jpegThumbnail: thumbnailBuffer // Miniatura limpia y proporcionada
             };
 
-            // Inyectamos las llaves de la nube para forzar la expansión de la tarjeta
+            // Inyectamos las llaves de la nube para el diseño ancho HD
             if (hqImageMsg) {
                 payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
                 payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
@@ -597,7 +603,6 @@ app.post('/send-text', async (req, res) => {
                 extendedTextMessage: payloadExtended
             }, { userJid: whatsappSock.user.id });
 
-            // Doble check garantizado
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
