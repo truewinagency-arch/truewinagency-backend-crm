@@ -494,12 +494,15 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (CDN + ANTI-PIXELADO)
+// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (ANTI-COLAPSO 408)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
     
+    // 🚀 SALVAVIDAS ANTI-408: Le da tiempo al servidor de responderle a WhatsApp
+    const respirar = () => new Promise(resolve => setTimeout(resolve, 50));
+
     try {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
@@ -512,24 +515,36 @@ app.post('/send-text', async (req, res) => {
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Descargando imagen original de catálogo: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Descargando imagen original: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
                     });
                     
                     if (resImagen.ok) {
                         const arrayBuffer = await resImagen.arrayBuffer();
+                        await respirar(); // Tomamos aire antes de dársela a Jimp
                         
-                        // 1. LEEMOS LA IMAGEN Y LA PURIFICAMOS A JPEG
                         const image = await Jimp.read(Buffer.from(arrayBuffer));
-                        image.background(0xFFFFFFFF); // Evita el bug de transparencia si era PNG
+                        await respirar(); // Tomamos aire tras leerla
+
+                        image.background(0xFFFFFFFF); 
                         
-                        // Guardamos las medidas reales para evitar el pixelado por estiramiento
+                        // 🚀 PREVENCIÓN DE CONGELAMIENTO:
+                        // Si la imagen de tu web es un monstruo 4K, la reducimos a 800px (HD Celular).
+                        // Sigue siendo panorámica, sigue siendo de altísima calidad, pero no tumba el servidor.
+                        if (image.bitmap.width > 800 || image.bitmap.height > 800) {
+                            image.scaleToFit(800, 800);
+                        }
+                        
+                        // Guardamos las medidas reales HD para el Banner
                         realWidth = image.bitmap.width;
                         realHeight = image.bitmap.height;
+                        await respirar(); // Tomamos aire tras escalar
 
-                        // 2. SUBIMOS AL CDN DE META EN ALTA CALIDAD (Tu lógica original)
+                        // 1. SUBIMOS EL BÚFER HD AL CDN DE META
                         const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        await respirar();
+
                         const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
                         const mediaUpload = await prepareWAMessageMedia(
                             { image: bufferHQ },
@@ -538,11 +553,9 @@ app.post('/send-text', async (req, res) => {
                         hqImageMsg = mediaUpload.imageMessage;
                         console.log("[Backend] Imagen HQ subida al CDN de Meta exitosamente.");
 
-                        // 3. CREAMOS LA MINIATURA LIGERA (<64KB) SIN DEFORMAR (La cura al pixelado)
+                        // 2. CREAMOS LA MINIATURA DE CARGA RÁPIDA (Sin deformar, anti-pixelado)
                         const thumbImage = image.clone();
-                        // Usamos scaleToFit para mantener la proporción exacta. 
-                        // Así WhatsApp no la estira a la fuerza.
-                        thumbImage.scaleToFit(400, 400).quality(60); 
+                        thumbImage.scaleToFit(300, 300).quality(60); 
                         let bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
                         
                         if (bufferProcesado.length < 64000) {
@@ -553,7 +566,7 @@ app.post('/send-text', async (req, res) => {
                         }
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo en el motor de Alta Resolución. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo en el motor HD. Usando respaldo.", e.message);
                 }
             }
 
@@ -562,7 +575,7 @@ app.post('/send-text', async (req, res) => {
             }
 
             // =================================================================
-            // 🚀 4. ENSAMBLAJE PROTOBUF NATIVO
+            // 🚀 3. ENSAMBLAJE PROTOBUF NATIVO
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
@@ -575,7 +588,7 @@ app.post('/send-text', async (req, res) => {
                 jpegThumbnail: thumbnailBuffer
             };
 
-            // Inyectamos las llaves de la nube y las proporciones exactas
+            // Inyectamos las llaves de la nube y las proporciones HD
             if (hqImageMsg) {
                 payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
                 payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
@@ -583,7 +596,6 @@ app.post('/send-text', async (req, res) => {
                 payloadExtended.mediaKey = hqImageMsg.mediaKey;
                 payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
                 
-                // Usamos las dimensiones reales de Jimp en vez de las de Baileys que a veces fallan
                 payloadExtended.thumbnailHeight = realHeight;
                 payloadExtended.thumbnailWidth = realWidth;
             }
