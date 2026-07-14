@@ -506,67 +506,85 @@ app.post('/send-text', async (req, res) => {
 
         if (linkData) {
             let thumbnailBuffer = null;
+            let hqImageMsg = null; // Guardará las llaves de la imagen HD en la nube de Meta
 
-            // 1. Descargamos la imagen del frontend en RAM
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Descargando y comprimiendo imagen de metadatos: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Descargando imagen original de catálogo: ${linkData.imageUrl}`);
+                    const resImagen = await fetch(linkData.imageUrl, {
+                        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+                    });
                     
-                    // Jimp lee la imagen sin importar si es PNG, muy grande o pesada
-                    const image = await Jimp.read(linkData.imageUrl);
-                    
-                    // 🚀 COMPRESIÓN TIPO WHATSAPP NATIVO:
-                    // 1. Fondo blanco por si era un PNG transparente
-                    // 2. Recortamos a un cuadrado perfecto de 300x300 (ideal para la tarjeta)
-                    // 3. Bajamos la calidad al 65% para asegurar un peso ínfimo
-                    image.background(0xFFFFFFFF)
-                         .cover(300, 300)
-                         .quality(65);
+                    if (resImagen.ok) {
+                        const arrayBuffer = await resImagen.arrayBuffer();
+                        const bufferOriginal = Buffer.from(arrayBuffer);
+                        
+                        // 🚀 1. MAGIA NATIVA: Subimos la imagen en ALTA CALIDAD al CDN de WhatsApp
+                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+                        const mediaUpload = await prepareWAMessageMedia(
+                            { image: bufferOriginal },
+                            { upload: whatsappSock.waUploadToServer }
+                        );
+                        hqImageMsg = mediaUpload.imageMessage;
+                        console.log("[Backend] Imagen HQ subida al CDN de Meta exitosamente.");
 
-                    // Extraemos el binario forzando estrictamente el formato JPEG
-                    const bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
-                    
-                    // 🔒 CANDADO META: Verificamos el peso final
-                    if (bufferProcesado.length < 64000) {
-                        thumbnailBuffer = bufferProcesado;
-                        console.log(`[Backend] Imagen procesada con éxito. Peso final: ${(bufferProcesado.length / 1024).toFixed(2)} KB.`);
-                    } else {
-                        // Respaldo agresivo si la imagen era increíblemente densa
-                        image.quality(40);
-                        thumbnailBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        // 2. CREAMOS LA MINIATURA LIGERA (<64KB) PARA CARGA RÁPIDA (Requisito del protocolo)
+                        const image = await Jimp.read(bufferOriginal);
+                        image.background(0xFFFFFFFF).cover(300, 300).quality(65);
+                        let bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        
+                        if (bufferProcesado.length < 64000) {
+                            thumbnailBuffer = bufferProcesado;
+                        } else {
+                            image.quality(40);
+                            thumbnailBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        }
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo al procesar la imagen con Jimp. Usando píxel de supervivencia.", e.message);
+                    console.warn("[Backend] Fallo en el motor de Alta Resolución. Usando respaldo.", e.message);
                 }
             }
 
-            // Búfer de supervivencia (Micropíxel JPEG)
+            // Búfer de supervivencia si ocurre un error de red
             if (!thumbnailBuffer) {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
             }
 
             // =================================================================
-            // 🚀 3. EL SECRETO: INYECCIÓN DIRECTA EN EL PROTOCOLO (Sin filtros)
+            // 🚀 3. ENSAMBLAJE PROTOBUF NATIVO (EL TRUCO FINAL)
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
-            // Armamos la estructura exacta que los servidores de Meta están esperando
+            // Construimos la base del mensaje enriquecido
+            const payloadExtended = {
+                text: mensajeFinal,
+                matchedText: linkData.url,
+                canonicalUrl: linkData.url,
+                title: linkData.title,
+                description: linkData.description,
+                jpegThumbnail: thumbnailBuffer // Miniatura para carga instantánea
+            };
+
+            // 🌟 LA CLAVE: Si logramos subir la imagen a Meta, inyectamos los apuntadores
+            // Esto es lo que le ordena al celular del cliente: "Expande la tarjeta y muestra la imagen grande"
+            if (hqImageMsg) {
+                payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
+                payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
+                payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
+                payloadExtended.mediaKey = hqImageMsg.mediaKey;
+                payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+                payloadExtended.thumbnailHeight = hqImageMsg.height;
+                payloadExtended.thumbnailWidth = hqImageMsg.width;
+            }
+
             const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-                extendedTextMessage: {
-                    text: mensajeFinal,
-                    matchedText: linkData.url,
-                    canonicalUrl: linkData.url,
-                    title: linkData.title,
-                    description: linkData.description,
-                    jpegThumbnail: thumbnailBuffer // El búfer binario en crudo
-                }
+                extendedTextMessage: payloadExtended
             }, { userJid: whatsappSock.user.id });
 
-            // Enviamos el paquete binario directamente al socket, ignorando la función tradicional
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
-            // Sin metadatos, envío de texto plano tradicional
+            // Sin metadatos, envío de texto plano
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
 
