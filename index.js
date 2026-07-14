@@ -494,7 +494,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (SIN CDN, CERO TRANSPARENCIAS)
+// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (CDN + JPEG ESTRICTO + GEOMETRÍA)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -506,8 +506,9 @@ app.post('/send-text', async (req, res) => {
 
         if (linkData) {
             let thumbnailBuffer = null;
-            let realWidth = 0;
-            let realHeight = 0;
+            let hqImageMsg = null;
+            let finalWidth = 0;
+            let finalHeight = 0;
 
             if (linkData.imageUrl) {
                 try {
@@ -520,26 +521,48 @@ app.post('/send-text', async (req, res) => {
                         const arrayBuffer = await resImagen.arrayBuffer();
                         const image = await Jimp.read(Buffer.from(arrayBuffer));
                         
-                        // 🌟 1. CAPTURAMOS LAS DIMENSIONES ORIGINALES
-                        // Esto le dice a WhatsApp: "Haz la caja grande y panorámica"
-                        realWidth = image.bitmap.width;
-                        realHeight = image.bitmap.height;
+                        // 🌟 1. PURIFICACIÓN A JPEG ESTRICTO (El secreto contra la transparencia)
+                        // Llenamos posibles transparencias de PNG con blanco y aseguramos el formato.
+                        image.background(0xFFFFFFFF); 
+                        
+                        // Capturamos proporciones originales para la caja panorámica
+                        finalWidth = image.bitmap.width;
+                        finalHeight = image.bitmap.height;
 
-                        // 🌟 2. COMPRESIÓN DE ALTA NITIDEZ (Sin usar CDN)
-                        // Escalamos a 600px (Suficiente para verse HD en celulares) manteniendo proporción
-                        image.background(0xFFFFFFFF).scaleToFit(600, 600).quality(65);
-                        let bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
-                        
-                        // Protegemos el límite estricto de Meta (Max ~60KB para miniaturas)
-                        if (bufferProcesado.length > 60000) {
-                            image.quality(35);
-                            bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        // Escalamos si es masiva (ej. 4K) para no colapsar la RAM de celulares gama baja
+                        if (finalWidth > 1200 || finalHeight > 1200) {
+                            image.scaleToFit(1200, 1200);
+                            finalWidth = image.bitmap.width;
+                            finalHeight = image.bitmap.height;
                         }
+
+                        // Generamos el Búfer HQ 100% JPEG
+                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
+
+                        // 🌟 2. SUBIDA AL CDN DE META (Ahora sí es un JPEG válido y seguro)
+                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+                        const mediaUpload = await prepareWAMessageMedia(
+                            { image: bufferHQ },
+                            { upload: whatsappSock.waUploadToServer }
+                        );
+                        hqImageMsg = mediaUpload.imageMessage;
+                        console.log("[Backend] Imagen JPEG HD subida al CDN con éxito.");
+
+                        // 🌟 3. COMPRESIÓN DE LA MINIATURA INSTANTÁNEA (<60KB)
+                        // Clonamos la imagen ya procesada para crear el paquete ligero
+                        const thumbImage = image.clone();
+                        thumbImage.scaleToFit(400, 400).quality(50);
+                        let bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
                         
+                        // Bloqueo estricto contra el límite de Meta
+                        if (bufferProcesado.length > 60000) {
+                            thumbImage.quality(30);
+                            bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
+                        }
                         thumbnailBuffer = bufferProcesado;
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo al procesar imagen HD. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo en el motor CDN HD. Usando respaldo.", e.message);
                 }
             }
 
@@ -549,7 +572,7 @@ app.post('/send-text', async (req, res) => {
             }
 
             // =================================================================
-            // 🚀 3. ENSAMBLAJE PROTOBUF: INYECCIÓN DIRECTA DE DIMENSIONES
+            // 🚀 4. ENSAMBLAJE PROTOBUF NATIVO
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
@@ -562,12 +585,17 @@ app.post('/send-text', async (req, res) => {
                 jpegThumbnail: thumbnailBuffer 
             };
 
-            // 🌟 LA MAGIA OCURRE AQUÍ: Pasamos las dimensiones sin pasar llaves de encriptación.
-            // El celular estirará nuestro 'jpegThumbnail' de 600px para llenar la caja,
-            // logrando el efecto panorámico HD al instante.
-            if (realWidth > 0 && realHeight > 0) {
-                payloadExtended.thumbnailWidth = realWidth;
-                payloadExtended.thumbnailHeight = realHeight;
+            // 🌟 Inyectamos llaves criptográficas + Geometría Exacta
+            if (hqImageMsg) {
+                payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
+                payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
+                payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
+                payloadExtended.mediaKey = hqImageMsg.mediaKey;
+                payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+                
+                // Las dimensiones panorámicas que le ordenan a WhatsApp dibujar el banner grande
+                payloadExtended.thumbnailHeight = finalHeight;
+                payloadExtended.thumbnailWidth = finalWidth;
             }
 
             const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
@@ -580,7 +608,7 @@ app.post('/send-text', async (req, res) => {
             // Sin metadatos, envío de texto plano
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
-
+        
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
