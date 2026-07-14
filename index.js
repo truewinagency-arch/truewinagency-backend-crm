@@ -108,6 +108,8 @@ let cacheCreds = {};
 let cacheKeys = {};
 let cacheCargada = false;;
 
+const idsEnviadosPorBot = new Set();
+
 // =========================================================================
 // 3. CONEXIÓN A WHATSAPP CON CACHÉ EN RAM + LOTES EN FIRESTORE
 // =========================================================================
@@ -232,15 +234,28 @@ async function connectToWhatsApp() {
     whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        
-        // 🚀 CANDADO ANTI-BAN 1: Eliminamos la propiedad 'browser' por completo.
-        // Dejamos que Baileys use su camuflaje nativo por defecto para evitar rechazos 428.
-        
         getMessage: async (key) => {
             return undefined;
         },
         logger: pino({ level: 'silent' }) 
     });
+
+    // =========================================================================
+    // 🚀 INTERCEPTOR MAESTRO DE ENVÍOS (El aniquilador de duplicados)
+    // Atrapa cualquier cosa que el bot envíe y guarda su ID en la memoria temporal.
+    // =========================================================================
+    const sendMessageOriginal = whatsappSock.sendMessage.bind(whatsappSock);
+    whatsappSock.sendMessage = async (jid, content, options) => {
+        const msgEnviado = await sendMessageOriginal(jid, content, options);
+        if (msgEnviado && msgEnviado.key && msgEnviado.key.id) {
+            idsEnviadosPorBot.add(msgEnviado.key.id);
+            // Limpieza inteligente para no saturar la RAM de tu servidor
+            if (idsEnviadosPorBot.size > 500) {
+                idsEnviadosPorBot.delete(idsEnviadosPorBot.values().next().value);
+            }
+        }
+        return msgEnviado;
+    };
 
     const { DisconnectReason } = require('@whiskeysockets/baileys');
     const { Boom } = require('@hapi/boom'); 
@@ -312,12 +327,17 @@ async function connectToWhatsApp() {
     whatsappSock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         
-        // 🚀 CANDADO ELIMINADO: Quitamos el "msg.key.fromMe" para que el servidor pueda leer lo que tú envías desde el celular.
+        // 🚀 ESCUDO ANTI-ECO: Si el mensaje lo envió este mismo servidor, lo ignoramos.
+        // Ya fue guardado y dibujado por la función que lo disparó originalmente.
+        if (msg.key.fromMe && msg.key.id && idsEnviadosPorBot.has(msg.key.id)) {
+            return;
+        }
+
+        // Dejamos pasar todo lo demás (Mensajes del cliente y Mensajes enviados desde tu celular físico)
         if (!msg.message || msg.key.remoteJid === 'status@broadcast' || msg.key.remoteJid.includes('@newsletter')) {
             return;
         }
 
-        // 🚀 DETECTOR DE DIRECCIÓN: ¿Lo envió el cliente ('in') o lo enviaste tú desde tu teléfono ('out')?
         const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
 
         // EXTRAEMOS EL TIPO DE MENSAJE AL INICIO PARA LOS FILTROS
