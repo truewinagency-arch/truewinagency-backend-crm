@@ -494,7 +494,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: BANNER HD CRISTALINO (SIN CDN - RECTÁNGULO PURO)
+// 🌐 ENDPOINT MANUAL: BANNER GIGANTE NATIVO (SHARP + CDN PURIFICADO)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -506,12 +506,13 @@ app.post('/send-text', async (req, res) => {
 
         if (linkData) {
             let thumbnailBuffer = null;
+            let hqImageMsg = null;
             const targetWidth = 600;
-            const targetHeight = 314; // 🌟 Proporción mágica 1.91:1 que activa el Banner Gigante
+            const targetHeight = 314; // Proporción Banner 1.91:1
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Creando Lienzo Rectangular HD para: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Sharp procesando Banner HD: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0' }
                     });
@@ -520,62 +521,96 @@ app.post('/send-text', async (req, res) => {
                         const arrayBuffer = await resImagen.arrayBuffer();
                         const originalBuffer = Buffer.from(arrayBuffer);
                         
-                        // 🌟 EL TRUCO GEOMÉTRICO DEFINITIVO:
-                        // Forzamos a Sharp a encajar cualquier imagen dentro de un molde de 600x314.
-                        // Si tu portada es cuadrada (1x1), le añade bordes blancos limpios a los lados sin estirarla.
-                        // Al recibir un rectángulo nativo, WhatsApp activa el Banner Grande de forma obligatoria.
-                        let calidad = 75;
-                        thumbnailBuffer = await sharp(originalBuffer)
-                            .resize(targetWidth, targetHeight, {
-                                fit: 'contain',
-                                background: { r: 255, g: 255, b: 255 }
+                        // 🌟 1. PURIFICACIÓN EXTREMA DEL JPEG PARA LA NUBE DE META
+                        // Esto evita la "Caja Transparente".
+                        // withMetadata(false): Elimina perfiles de color ICC extraños.
+                        // toColorspace('srgb'): Fuerza el estándar web.
+                        // chromaSubsampling: '4:4:4': Evita corrupciones visuales en WhatsApp.
+                        const bufferHQ = await sharp(originalBuffer)
+                            .resize(targetWidth, targetHeight, { 
+                                fit: 'contain', 
+                                background: { r: 255, g: 255, b: 255 } 
                             })
-                            .jpeg({ quality: calidad })
+                            .withMetadata(false) // Vital para que WhatsApp no se confunda
+                            .toColorspace('srgb')
+                            .jpeg({ quality: 85, progressive: false, chromaSubsampling: '4:4:4' })
                             .toBuffer();
 
-                        // Bucle súper sónico de seguridad anti-colapsos
-                        while (thumbnailBuffer.length > 50000 && calidad > 20) {
+                        // 🌟 2. SUBIDA AL CDN (Sin bloquear el servidor)
+                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+                        const mediaUpload = await prepareWAMessageMedia(
+                            { image: bufferHQ },
+                            { upload: whatsappSock.waUploadToServer }
+                        );
+                        hqImageMsg = mediaUpload.imageMessage;
+                        console.log("[Backend] Imagen HD subida al CDN (Cero cajas invisibles).");
+
+                        // 🌟 3. MINIATURA DE CARGA RÁPIDA (< 45KB)
+                        let calidad = 75;
+                        thumbnailBuffer = await sharp(originalBuffer)
+                            .resize(targetWidth, targetHeight, { 
+                                fit: 'contain', 
+                                background: { r: 255, g: 255, b: 255 } 
+                            })
+                            .withMetadata(false)
+                            .toColorspace('srgb')
+                            .jpeg({ quality: calidad, progressive: false, chromaSubsampling: '4:4:4' })
+                            .toBuffer();
+
+                        // Blindaje contra límite de socket (EPIPE)
+                        while (thumbnailBuffer.length > 45000 && calidad > 20) {
                             calidad -= 10;
                             thumbnailBuffer = await sharp(originalBuffer)
-                                .resize(targetWidth, targetHeight, {
-                                    fit: 'contain',
-                                    background: { r: 255, g: 255, b: 255 }
+                                .resize(targetWidth, targetHeight, { 
+                                    fit: 'contain', 
+                                    background: { r: 255, g: 255, b: 255 } 
                                 })
-                                .jpeg({ quality: calidad })
+                                .withMetadata(false)
+                                .toColorspace('srgb')
+                                .jpeg({ quality: calidad, progressive: false, chromaSubsampling: '4:4:4' })
                                 .toBuffer();
                         }
-                        
-                        console.log(`[Backend] Banner HD empaquetado. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                        console.log(`[Backend] Búfer empacado. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo al generar el banner con Sharp:", e.message);
+                    console.warn("[Backend] Error en motor Sharp. Usando respaldo.", e.message);
                 }
             }
 
-            // Respaldo de supervivencia
             if (!thumbnailBuffer) {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
             }
 
             // =================================================================
-            // 🚀 ENSAMBLAJE PROTOBUF NATIVO (ENTREGA 100% GARANTIZADA - DOBLE CHECK)
+            // 🚀 4. ENSAMBLAJE PROTOBUF NATIVO
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
+            const payloadExtended = {
+                text: mensajeFinal,
+                matchedText: linkData.url,
+                canonicalUrl: linkData.url,
+                title: linkData.title,
+                description: linkData.description,
+                jpegThumbnail: thumbnailBuffer, 
+                thumbnailWidth: targetWidth,     
+                thumbnailHeight: targetHeight
+            };
+
+            // INYECTAMOS LAS LLAVES (Esto obliga a WhatsApp a dibujar la tarjeta GRANDE)
+            if (hqImageMsg) {
+                payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
+                payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
+                payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
+                payloadExtended.mediaKey = hqImageMsg.mediaKey;
+                payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+            }
+
             const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-                extendedTextMessage: {
-                    text: mensajeFinal,
-                    matchedText: linkData.url,
-                    canonicalUrl: linkData.url,
-                    title: linkData.title,
-                    description: linkData.description,
-                    jpegThumbnail: thumbnailBuffer, // Contiene el rectángulo nítido procesado
-                    thumbnailWidth: targetWidth,     // Confirmamos las dimensiones panorámicas exactas
-                    thumbnailHeight: targetHeight
-                }
+                extendedTextMessage: payloadExtended
             }, { userJid: whatsappSock.user.id });
 
-            // Enviamos directo al socket sin pasar por la nube de Meta
+            // Envío final
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
@@ -585,7 +620,7 @@ app.post('/send-text', async (req, res) => {
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con Banner HD:", error);
+        console.error("Fallo al enviar texto manual con Protobuf:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
