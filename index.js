@@ -235,15 +235,31 @@ async function connectToWhatsApp() {
         }
     };
 
+    // =========================================================================
+    // 🚀 EXTRACCIÓN DE VERSIÓN OFICIAL Y CONFIGURACIÓN DEL SOCKET
+    // =========================================================================
+    const { fetchLatestWaWebVersion, Browsers } = require('@whiskeysockets/baileys');
+    let versionWaWeb = [2, 3000, 1015901307]; // Versión de respaldo estática
+    
+    try {
+        // Obtenemos la última versión de los servidores de Meta para evitar el Error 405
+        const { version, isLatest } = await fetchLatestWaWebVersion();
+        versionWaWeb = version;
+        console.log(`[TrueWin] Conectando con versión WA Web oficial: ${version.join('.')} (¿Es la última?: ${isLatest})`);
+    } catch (vError) {
+        console.warn("[TrueWin] No se pudo obtener la versión en vivo de Meta, usando respaldo seguro.");
+    }
+
     whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
+        version: versionWaWeb, // 🌟 CLAVE: Le dice a Meta que somos un cliente moderno actualizado
+        browser: Browsers.ubuntu('Chrome'), // 🌟 CLAVE: Nos camufla como un navegador Linux legítimo
         getMessage: async (key) => {
             return undefined;
         },
         logger: pino({ level: 'silent' }) 
     });
-
     // =========================================================================
     // 🚀 INTERCEPTOR MAESTRO DE ENVÍOS (El aniquilador de duplicados)
     // Atrapa cualquier cosa que el bot envíe y guarda su ID en la memoria temporal.
