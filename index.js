@@ -264,7 +264,7 @@ async function connectToWhatsApp() {
     const { DisconnectReason } = require('@whiskeysockets/baileys');
     const { Boom } = require('@hapi/boom'); 
 
-    whatsappSock.ev.on('connection.update', async (update) => {
+  whatsappSock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update; 
         
         if (qr) {
@@ -285,13 +285,31 @@ async function connectToWhatsApp() {
                 return; 
             }
 
+            // 🚀 CORRECCIÓN DEFINITIVA: Destrucción por Falla de Conexión / Sesión Inválida (405 y 401)
+            if (codigoError === 405 || codigoError === 401) {
+                console.error(`[🚨 ALERTA ${codigoError}] Credenciales corruptas o inválidas en caché. Purgando RAM para generar QR limpio.`);
+                io.emit('estado-conexion', 'desconectado'); 
+                whatsappSock = null; 
+                
+                // Vaciamos la caché rápida en memoria para que no arrastre datos viejos
+                cacheCreds = {}; 
+                cacheKeys = {}; 
+                cacheCargada = false;
+
+                // Si manejas almacenamiento persistente en disco o base de datos que alimente 
+                // tu caché rápida, este es el lugar para borrar o limpiar ese registro físico.
+
+                console.log("[TrueWin] Inicializando flujo limpio desde cero en 4 segundos...");
+                setTimeout(() => connectToWhatsApp(), 4000);
+                return; // Cortamos la ejecución para que no ejecute el flujo de abajo
+            }
+
             // 🚀 CORRECCIÓN: Destrucción Total ante Baneo (403)
             if (codigoError === 403 || codigoError === DisconnectReason.forbidden) {
                 console.error("[🚨 ALERTA 403] Servidores de Meta rechazaron autenticación (Posible Baneo). DETENIENDO.");
-                io.emit('estado-conexion', 'desconectado'); // Forzamos el panel a ROJO en todos los CRMs abiertos
-                whatsappSock = null; // Matamos el socket zombi
+                io.emit('estado-conexion', 'desconectado'); 
+                whatsappSock = null; 
                 
-                // Limpiamos la RAM para evitar que el bot intente usar llaves baneadas
                 cacheCreds = {}; 
                 cacheKeys = {}; 
                 cacheCargada = false;
@@ -301,7 +319,7 @@ async function connectToWhatsApp() {
             // 🚀 CORRECCIÓN: Destrucción Total ante Desvinculación de Dispositivo
             if (codigoError === DisconnectReason.loggedOut) {
                 console.error("[🚨 Sesión Cerrada] Usuario desvinculó el bot desde el celular. Deteniendo reconexión.");
-                io.emit('estado-conexion', 'desconectado'); // Forzamos el panel a ROJO
+                io.emit('estado-conexion', 'desconectado'); 
                 whatsappSock = null; 
                 
                 cacheCreds = {}; 
@@ -312,7 +330,6 @@ async function connectToWhatsApp() {
 
             console.log(`[TrueWin] Reiniciando flujo de forma limpia en 3 segundos (Código: ${codigoError})...`);
             
-            // Destructor de sockets viejo para evitar clones en reconexiones 500/503/515
             if (whatsappSock) {
                 whatsappSock.ev.removeAllListeners();
             }
@@ -323,7 +340,6 @@ async function connectToWhatsApp() {
         if (connection === 'open') {
             console.log('[TrueWin] ¡CONEXIÓN GLOBAL ESTABLECIDA CON ÉXITO EN WHATSAPP!');
             ultimoQR = null; 
-            // 🚀 5. CORRECCIÓN DEL CRM: Avisamos a tu web en vivo para que NO tengas que refrescar
             io.emit('estado-conexion', 'conectado'); 
         }
     });
