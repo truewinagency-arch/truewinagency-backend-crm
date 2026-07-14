@@ -506,8 +506,8 @@ app.post('/send-text', async (req, res) => {
 
         if (linkData) {
             let thumbnailBuffer = null;
-            let finalWidth = 600;
-            let finalHeight = 314;
+            let finalWidth = 1080;
+            let finalHeight = 1280;
 
             if (linkData.imageUrl) {
                 try {
