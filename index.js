@@ -559,79 +559,8 @@ app.post('/send-text', async (req, res) => {
         const jidReal = formatearJid(numero);
 
         if (linkData) {
-            let thumbnailBuffer = null;
-            const targetWidth = 0;
-            const targetHeight = 0; // 🌟 Proporción mágica 1.91:1 que activa el Banner Gigante
-
-            if (linkData.imageUrl) {
-                try {
-                    console.log(`[Backend] Creando Lienzo Rectangular HD para: ${linkData.imageUrl}`);
-                    const resImagen = await fetch(linkData.imageUrl, {
-                        headers: { 'User-Agent': 'Mozilla/5.0' }
-                    });
-                    
-                    if (resImagen.ok) {
-                        const arrayBuffer = await resImagen.arrayBuffer();
-                        const originalBuffer = Buffer.from(arrayBuffer);
-                        
-                        // 🌟 EL TRUCO GEOMÉTRICO DEFINITIVO:
-                        // Forzamos a Sharp a encajar cualquier imagen dentro de un molde de 600x314.
-                        // Si tu portada es cuadrada (1x1), le añade bordes blancos limpios a los lados sin estirarla.
-                        // Al recibir un rectángulo nativo, WhatsApp activa el Banner Grande de forma obligatoria.
-                        let calidad = 75;
-                        thumbnailBuffer = await sharp(originalBuffer)
-                            .resize(targetWidth, targetHeight, {
-                                fit: 'contain',
-                                background: { r: 255, g: 255, b: 255 }
-                            })
-                            .jpeg({ quality: calidad })
-                            .toBuffer();
-
-                        // Bucle súper sónico de seguridad anti-colapsos
-                        while (thumbnailBuffer.length > 50000 && calidad > 20) {
-                            calidad -= 10;
-                            thumbnailBuffer = await sharp(originalBuffer)
-                                .resize(targetWidth, targetHeight, {
-                                    fit: 'contain',
-                                    background: { r: 255, g: 255, b: 255 }
-                                })
-                                .jpeg({ quality: calidad })
-                                .toBuffer();
-                        }
-                        
-                        console.log(`[Backend] Banner HD empaquetado. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
-                    }
-                } catch (e) {
-                    console.warn("[Backend] Fallo al generar el banner con Sharp:", e.message);
-                }
-            }
-
-            // Respaldo de supervivencia
-            if (!thumbnailBuffer) {
-                thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
-            }
-
-            // =================================================================
-            // 🚀 ENSAMBLAJE PROTOBUF NATIVO (ENTREGA 100% GARANTIZADA - DOBLE CHECK)
-            // =================================================================
-            const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
-
-            const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-                extendedTextMessage: {
-                    text: mensajeFinal,
-                    matchedText: linkData.url,
-                    canonicalUrl: linkData.url,
-                    title: linkData.title,
-                    description: linkData.description,
-                    jpegThumbnail: thumbnailBuffer, // Contiene el rectángulo nítido procesado
-                    thumbnailWidth: targetWidth,     // Confirmamos las dimensiones panorámicas exactas
-                    thumbnailHeight: targetHeight
-                }
-            }, { userJid: whatsappSock.user.id });
-
-            // Enviamos directo al socket sin pasar por la nube de Meta
-            await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
-
+            // 🚀 LLAMAMOS A LA FÁBRICA DE TARJETAS
+            await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData);
         } else {
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
@@ -900,6 +829,68 @@ app.delete('/api/plantillas/:id', async (req, res) => {
     }
 });
 
+// =========================================================================
+// 🚀 FÁBRICA DE TARJETAS HD (SIN BORDES BLANCOS)
+// =========================================================================
+async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
+    let thumbnailBuffer = null;
+
+    if (linkData && linkData.imageUrl) {
+        try {
+            console.log(`[Tarjeta] Generando miniatura proporcional para: ${linkData.imageUrl}`);
+            const resImagen = await fetch(linkData.imageUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0' }
+            });
+            
+            if (resImagen.ok) {
+                const arrayBuffer = await resImagen.arrayBuffer();
+                const originalBuffer = Buffer.from(arrayBuffer);
+                
+                let calidad = 75;
+                
+                // 🌟 GEOMETRÍA NATIVA: Solo definimos el ancho (400px). 
+                // Sharp auto-calcula la altura para mantener tu proporción exacta sin bordes blancos.
+                thumbnailBuffer = await sharp(originalBuffer)
+                    .resize({ width: 400, withoutEnlargement: true })
+                    .jpeg({ quality: calidad })
+                    .toBuffer();
+
+                // Bucle de compresión estricto (< 45KB)
+                while (thumbnailBuffer.length > 45000 && calidad > 15) {
+                    calidad -= 10;
+                    thumbnailBuffer = await sharp(originalBuffer)
+                        .resize({ width: 400, withoutEnlargement: true })
+                        .jpeg({ quality: calidad })
+                        .toBuffer();
+                }
+                console.log(`[Tarjeta] Miniatura empacada. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+            }
+        } catch (e) {
+            console.warn("[Tarjeta] Fallo al generar la miniatura:", e.message);
+        }
+    }
+
+    // Respaldo de supervivencia
+    if (!thumbnailBuffer) {
+        thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
+    }
+
+    const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
+
+    const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
+        extendedTextMessage: {
+            text: mensajeFinal,
+            matchedText: linkData.url,
+            canonicalUrl: linkData.url,
+            title: linkData.title,
+            description: linkData.description,
+            jpegThumbnail: thumbnailBuffer // Geometría pura y nítida
+        }
+    }, { userJid: whatsappSock.user.id });
+
+    await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
+}
+
 
 
 // 🚀 CEREBRO DEL CHATBOT EN LA NUBE: Evalúa palabras clave 24/7 de forma autónoma
@@ -982,7 +973,6 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
     const pause = (ms) => new Promise(res => setTimeout(res, ms));
     
     try {
-        // Simulación de lectura inicial humana antes de interactuar
         const tiempoLectura = Math.floor(Math.random() * (2200 - 1200 + 1)) + 1200; 
         await pause(tiempoLectura);
     } catch (e) {}
@@ -993,8 +983,8 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             let mUrl = msj.url || null;
             let mType = null;
 
-            // 🚀 PROCESAMIENTO ÚNICO: Aquí unificamos la variable maestra de texto
-            let textoBurbuja = msj.tipo === 'texto' || msj.tipo === 'media' ? procesarSpintax(textoOriginal) : textoOriginal;
+            // Procesamiento Spintax
+            let textoBurbuja = msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace' ? procesarSpintax(textoOriginal) : textoOriginal;
 
             if (msj.tipo === 'media' && msj.url) {
                 mType = msj.url.includes('.mp4') || msj.url.includes('.mov') ? 'video' : 'image';
@@ -1002,45 +992,37 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             } else if (msj.tipo === 'audio') {
                 mType = 'audio';
                 textoBurbuja = "[Nota de voz enviada]";
+            } else if (msj.tipo === 'enlace') {
+                mType = 'link'; 
+                // Extraemos la URL principal para guardarla en el historial
+                if (msj.linkData && msj.linkData.url) mUrl = msj.linkData.url; 
             }
 
-            // Telemetría humana dinámica
+            // 🚀 TELEMETRÍA HUMANA (Se mantiene idéntica)
             try {
                 if (msj.tipo === 'audio') {
                     await whatsappSock.sendPresenceUpdate('recording', numeroDestino);
                     await pause(4000); 
                 } else {
                     await whatsappSock.sendPresenceUpdate('composing', numeroDestino);
-                    
-                    // Algoritmo de tipeo realista según el largo del texto real
                     const caracteres = textoBurbuja ? textoBurbuja.length : 20;
-                    
-                    // 1. Velocidad variable: un humano en celular tarda entre 25ms y 55ms por letra
                     const velocidadPorLetra = Math.floor(Math.random() * (55 - 25 + 1)) + 25; 
-                    
-                    // 2. Tiempo de reacción: pausa inicial aleatoria antes de empezar a teclear (entre 300ms y 800ms)
                     const tiempoReaccion = Math.floor(Math.random() * (800 - 300 + 1)) + 300;
-                    
                     let tiempoTipeo = (caracteres * velocidadPorLetra) + tiempoReaccion;
                     
-                    // 3. Límites Dinámicos (Ya no son siempre 1.5s o 4.5s exactos)
-                    const limiteMinimo = Math.floor(Math.random() * (1900 - 1200 + 1)) + 1200; // Mínimo entre 1.2s y 1.9s
-                    const limiteMaximo = Math.floor(Math.random() * (6500 - 4800 + 1)) + 4800; // Máximo entre 4.8s y 6.5s
+                    const limiteMinimo = Math.floor(Math.random() * (1900 - 1200 + 1)) + 1200; 
+                    const limiteMaximo = Math.floor(Math.random() * (6500 - 4800 + 1)) + 4800; 
                     
                     if (tiempoTipeo < limiteMinimo) tiempoTipeo = limiteMinimo;
                     if (tiempoTipeo > limiteMaximo) tiempoTipeo = limiteMaximo;
                     
-                    // Redondeamos para que los logs se vean limpios
                     tiempoTipeo = Math.floor(tiempoTipeo);
-                    
                     console.log(`[Anti-Ban] Simulando tipeo por ${(tiempoTipeo / 1000).toFixed(2)}s para un mensaje de ${caracteres} letras.`);
                     await pause(tiempoTipeo);
                 }
-            } catch (e) { 
-                console.warn("No se pudo actualizar la telemetría de presencia:", e.message); 
-            }
+            } catch (e) { }
 
-            // 🚀 DISPARO CORREGIDO: Forzamos a Baileys a usar 'textoBurbuja' obligatoriamente
+            // 🚀 DISPARO CORREGIDO: Integración del Motor de Tarjetas
             if (msj.tipo === 'texto') {
                 await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
             } else if (msj.tipo === 'media' && msj.url) {
@@ -1051,15 +1033,18 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 }
             } else if (msj.tipo === 'audio' && msj.url) {
                 await whatsappSock.sendMessage(numeroDestino, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+            } else if (msj.tipo === 'enlace' && msj.linkData) {
+                // 🌟 AQUÍ EL BOT DESPACHA LA TARJETA METADATA
+                await enviarTarjetaEnlace(numeroDestino, textoBurbuja, msj.linkData);
             }
 
             // Apagamos estado de presencia
             try { await whatsappSock.sendPresenceUpdate('paused', numeroDestino); } catch (e) {}
 
-            // Guardamos en el historial de Firestore usando el texto real despachado
+            // Guardamos en el historial
             await guardarMensajeBD(numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
 
-            // Emitimos por WebSockets al CRM visual
+            // Emitimos por WebSockets al CRM
             io.emit('nuevo-mensaje', {
                 numero: numeroDestino,
                 nombre: "TrueWin",
@@ -1071,7 +1056,6 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 tipo: 'out'
             });
 
-            // Delay de separación orgánico entre piezas de la secuencia
             const delayHumano = Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500;
             await pause(delayHumano);
             
