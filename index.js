@@ -494,10 +494,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: HD BANNERS VÍA BUSINESS PROTOCOL (CERO PIXELADO)
-// =====================================================================
-// =====================================================================
-// 🌐 ENDPOINT MANUAL: HD BANNERS REALES (ENTREGA GARANTIZADA - 2 CHECKS)
+// 🌐 ENDPOINT MANUAL: HD BANNERS (EXTERNAL AD REPLY + COMPRESIÓN SEGURA)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -508,12 +505,51 @@ app.post('/send-text', async (req, res) => {
         const jidReal = formatearJid(numero);
 
         if (linkData) {
-            console.log(`[Backend] Despachando tarjeta HD nativa para: ${linkData.imageUrl}`);
-            
-            // 🚀 LA SOLUCIÓN AL RECHAZO DE META:
-            // Eliminamos los búferes binarios pesados. Al enviar EXCLUSIVAMENTE la URL en 'thumbnailUrl',
-            // el paquete es 100% legítimo para Meta. Se entrega en milisegundos (Doble Check)
-            // y el celular del cliente descarga la imagen original en su resolución nativa.
+            let thumbnailBuffer = null;
+
+            if (linkData.imageUrl) {
+                try {
+                    console.log(`[Backend] Procesando lienzo HD para Banner: ${linkData.imageUrl}`);
+                    const resImagen = await fetch(linkData.imageUrl, {
+                        headers: { 'User-Agent': 'Mozilla/5.0' }
+                    });
+                    
+                    if (resImagen.ok) {
+                        const arrayBuffer = await resImagen.arrayBuffer();
+                        const image = await Jimp.read(Buffer.from(arrayBuffer));
+                        
+                        // 🌟 1. EL LIENZO PERFECTO DE META (1.91:1)
+                        // Limpiamos transparencias y encajamos tu foto (sea cuadrada o larga)
+                        // en el molde exacto que WhatsApp exige para el Banner Gigante.
+                        image.background(0xFFFFFFFF).contain(600, 314);
+
+                        // 🌟 2. BUCLE ANTI-COLAPSOS (Límite blindado de 45 KB)
+                        let calidad = 85; // Arrancamos con una calidad altísima
+                        let bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        
+                        // Si pesa más de 45KB (el límite de seguridad de Baileys), bajamos la calidad
+                        // en saltos de 10. La resolución (600x314) se mantiene INTACTA, evitando el pixelado.
+                        while (bufferProcesado.length > 45000 && calidad > 20) {
+                            calidad -= 10;
+                            image.quality(calidad);
+                            bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        }
+                        
+                        thumbnailBuffer = bufferProcesado;
+                        console.log(`[Backend] Banner generado. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB. Calidad: ${calidad}%`);
+                    }
+                } catch (e) {
+                    console.warn("[Backend] Error en motor gráfico. Usando emergencia.", e.message);
+                }
+            }
+
+            if (!thumbnailBuffer) {
+                thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
+            }
+
+            // =================================================================
+            // 🚀 3. EL ENVÍO PERFECTO (Doble Check Garantizado + Banner Grande)
+            // =================================================================
             await whatsappSock.sendMessage(jidReal, {
                 text: mensajeFinal,
                 contextInfo: {
@@ -521,23 +557,23 @@ app.post('/send-text', async (req, res) => {
                         title: linkData.title,
                         body: linkData.description,
                         mediaType: 1, // 1 = Imagen
-                        thumbnailUrl: linkData.imageUrl, // URL pública directa de la imagen (Ej: Firebase o tu Web)
-                        sourceUrl: linkData.url, // Enlace de destino al hacer clic
-                        renderLargerThumbnail: true, // Forzar el diseño de Banner Panorámico Grande
-                        showAdAttribution: false
+                        thumbnail: thumbnailBuffer, // Pasamos SOLO el búfer seguro (Sin thumbnailUrl)
+                        sourceUrl: linkData.url, 
+                        renderLargerThumbnail: true, // La orden estricta de "Hazlo Gigante"
+                        showAdAttribution: false 
                     }
                 }
             });
 
         } else {
-            // Sin metadatos, envío de texto plano tradicional
+            // Envío normal sin links
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
         
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con protocolo optimizado:", error);
+        console.error("Fallo al enviar texto manual:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
