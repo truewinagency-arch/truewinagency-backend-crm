@@ -560,8 +560,8 @@ app.post('/send-text', async (req, res) => {
 
         if (linkData) {
             let thumbnailBuffer = null;
-            const targetWidth = 600;
-            const targetHeight = 314; // 🌟 Proporción mágica 1.91:1 que activa el Banner Gigante
+            const targetWidth = 0;
+            const targetHeight = 0; // 🌟 Proporción mágica 1.91:1 que activa el Banner Gigante
 
             if (linkData.imageUrl) {
                 try {
