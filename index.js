@@ -494,7 +494,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: BANNER GIGANTE NATIVO (SHARP + CDN PURIFICADO)
+// 🌐 ENDPOINT MANUAL: ARQUITECTURA NATIVA (CERO CAJAS VACÍAS Y SIN 408)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -507,73 +507,52 @@ app.post('/send-text', async (req, res) => {
         if (linkData) {
             let thumbnailBuffer = null;
             let hqImageMsg = null;
-            const targetWidth = 600;
-            const targetHeight = 314; // Proporción Banner 1.91:1
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Sharp procesando Banner HD: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Descargando imagen nativa: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0' }
                     });
                     
                     if (resImagen.ok) {
-                        const arrayBuffer = await resImagen.arrayBuffer();
-                        const originalBuffer = Buffer.from(arrayBuffer);
+                        const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                         
-                        // 🌟 1. PURIFICACIÓN EXTREMA DEL JPEG PARA LA NUBE DE META
-                        // Esto evita la "Caja Transparente".
-                        // withMetadata(false): Elimina perfiles de color ICC extraños.
-                        // toColorspace('srgb'): Fuerza el estándar web.
-                        // chromaSubsampling: '4:4:4': Evita corrupciones visuales en WhatsApp.
-                        const bufferHQ = await sharp(originalBuffer)
-                            .resize(targetWidth, targetHeight, { 
-                                fit: 'contain', 
-                                background: { r: 255, g: 255, b: 255 } 
-                            })
-                            .withMetadata(false) // Vital para que WhatsApp no se confunda
-                            .toColorspace('srgb')
-                            .jpeg({ quality: 85, progressive: false, chromaSubsampling: '4:4:4' })
-                            .toBuffer();
-
-                        // 🌟 2. SUBIDA AL CDN (Sin bloquear el servidor)
+                        // 🌟 1. SUBIDA DIRECTA AL CDN (Tu método original exitoso)
+                        // Enviamos el búfer original intacto para que WhatsApp detecte las proporciones reales.
                         const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
                         const mediaUpload = await prepareWAMessageMedia(
-                            { image: bufferHQ },
+                            { image: originalBuffer },
                             { upload: whatsappSock.waUploadToServer }
                         );
                         hqImageMsg = mediaUpload.imageMessage;
-                        console.log("[Backend] Imagen HD subida al CDN (Cero cajas invisibles).");
+                        console.log("[Backend] Llaves CDN generadas exitosamente.");
 
-                        // 🌟 3. MINIATURA DE CARGA RÁPIDA (< 45KB)
-                        let calidad = 75;
+                        // 🌟 2. LA MINIATURA DE SUPERVIVENCIA (< 15 KB ESTRICTO)
+                        // Mantenemos 600px de ancho para nitidez, pero comprimimos fuerte 
+                        // para burlar el borrado silencioso del celular.
+                        let calidad = 60;
                         thumbnailBuffer = await sharp(originalBuffer)
-                            .resize(targetWidth, targetHeight, { 
-                                fit: 'contain', 
-                                background: { r: 255, g: 255, b: 255 } 
-                            })
-                            .withMetadata(false)
-                            .toColorspace('srgb')
-                            .jpeg({ quality: calidad, progressive: false, chromaSubsampling: '4:4:4' })
+                            // withoutEnlargement mantiene tu aspecto original (sea 1:1 o 16:9) sin deformar
+                            .resize({ width: 600, withoutEnlargement: true }) 
+                            .flatten({ background: { r: 255, g: 255, b: 255 } })
+                            .jpeg({ quality: calidad, progressive: false })
                             .toBuffer();
 
-                        // Blindaje contra límite de socket (EPIPE)
-                        while (thumbnailBuffer.length > 45000 && calidad > 20) {
+                        // Bucle estricto: Bajar a menos de 15 KB
+                        while (thumbnailBuffer.length > 15000 && calidad > 10) {
                             calidad -= 10;
                             thumbnailBuffer = await sharp(originalBuffer)
-                                .resize(targetWidth, targetHeight, { 
-                                    fit: 'contain', 
-                                    background: { r: 255, g: 255, b: 255 } 
-                                })
-                                .withMetadata(false)
-                                .toColorspace('srgb')
-                                .jpeg({ quality: calidad, progressive: false, chromaSubsampling: '4:4:4' })
+                                .resize({ width: 600, withoutEnlargement: true })
+                                .flatten({ background: { r: 255, g: 255, b: 255 } })
+                                .jpeg({ quality: calidad, progressive: false })
                                 .toBuffer();
                         }
-                        console.log(`[Backend] Búfer empacado. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                        
+                        console.log(`[Backend] Miniatura blindada. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Error en motor Sharp. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo en el motor. Usando respaldo.", e.message);
                 }
             }
 
@@ -582,7 +561,7 @@ app.post('/send-text', async (req, res) => {
             }
 
             // =================================================================
-            // 🚀 4. ENSAMBLAJE PROTOBUF NATIVO
+            // 🚀 3. ENSAMBLAJE PROTOBUF EXACTO
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
@@ -592,25 +571,26 @@ app.post('/send-text', async (req, res) => {
                 canonicalUrl: linkData.url,
                 title: linkData.title,
                 description: linkData.description,
-                jpegThumbnail: thumbnailBuffer, 
-                thumbnailWidth: targetWidth,     
-                thumbnailHeight: targetHeight
+                jpegThumbnail: thumbnailBuffer 
             };
 
-            // INYECTAMOS LAS LLAVES (Esto obliga a WhatsApp a dibujar la tarjeta GRANDE)
+            // Inyectamos las llaves de la nube y las dimensiones EXACTAS de la imagen original
             if (hqImageMsg) {
                 payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
                 payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
                 payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
                 payloadExtended.mediaKey = hqImageMsg.mediaKey;
                 payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+                
+                payloadExtended.thumbnailHeight = hqImageMsg.height;
+                payloadExtended.thumbnailWidth = hqImageMsg.width;
             }
 
             const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
                 extendedTextMessage: payloadExtended
             }, { userJid: whatsappSock.user.id });
 
-            // Envío final
+            // Envío asegurado
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
