@@ -501,11 +501,10 @@ app.post('/send-text', async (req, res) => {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        // 🚀 SI EL FRONTEND NOS ENVIÓ METADATOS, ARMAMOS LA TARJETA COMPLETA
         if (linkData) {
             let thumbnailBuffer = null;
 
-            // 1. Descargamos la imagen en caliente
+            // 1. Descargamos la imagen del frontend en RAM
             if (linkData.imageUrl) {
                 try {
                     const resImagen = await fetch(linkData.imageUrl, {
@@ -515,43 +514,47 @@ app.post('/send-text', async (req, res) => {
                         const arrayBuffer = await resImagen.arrayBuffer();
                         const bufferTemp = Buffer.from(arrayBuffer);
                         
-                        // 🔒 CANDADO DE SEGURIDAD META: 
-                        // Verificamos que sea un JPEG real (Firma FF D8) y que pese menos de 64KB.
+                        // 🔒 CANDADO META: Solo aceptamos JPEG de menos de 64KB
                         if (bufferTemp[0] === 0xFF && bufferTemp[1] === 0xD8 && bufferTemp.length < 60000) {
                             thumbnailBuffer = bufferTemp;
                         }
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo al descargar imagen de metadatos.");
+                    console.warn("[Backend] Fallo al descargar imagen para metadatos.");
                 }
             }
 
-            // 2. Búfer de Supervivencia: Si la web devolvió un PNG o una imagen muy pesada,
-            // inyectamos un micro-píxel blanco para forzar a WhatsApp a renderizar la tarjeta.
+            // Búfer de supervivencia (Micropíxel JPEG 100% legal)
             if (!thumbnailBuffer) {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
             }
 
-            // 3. 🚀 ENSAMBLAJE NATIVO (Exactamente igual que la app móvil)
-            await whatsappSock.sendMessage(jidReal, { 
-                text: mensajeFinal,
-                matchedText: linkData.url,
-                canonicalUrl: linkData.url,
-                title: linkData.title,
-                description: linkData.description,
-                jpegThumbnail: thumbnailBuffer // La pieza maestra que faltaba
-            }, 
-            { linkPreview: null }); // Apagamos el scraper de la librería para evitar cuelgues
+            // 🚀 2. ENSAMBLAJE NATIVO: El secreto está en los parámetros
+            await whatsappSock.sendMessage(
+                jidReal, 
+                { text: mensajeFinal }, // Argumento 1: El contenido base (Solo texto)
+                { 
+                    // Argumento 2: Opciones. Le inyectamos la metadata pre-fabricada aquí.
+                    // Al pasar un objeto, Baileys apaga su scraper interno automáticamente y usa esto.
+                    linkPreview: {
+                        matchedText: linkData.url,
+                        canonicalUrl: linkData.url,
+                        title: linkData.title,
+                        description: linkData.description,
+                        jpegThumbnail: thumbnailBuffer // La magia ocurre aquí
+                    }
+                }
+            );
 
         } else {
-            // Si no hay enlaces, texto normal
+            // Sin metadatos, envío de texto plano
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
 
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto con tarjeta:", error);
+        console.error("Fallo al enviar texto manual:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
