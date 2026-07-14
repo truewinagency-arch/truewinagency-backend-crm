@@ -1030,34 +1030,69 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
 
             // 🚀 DISPARO CORREGIDO: Integración del Motor de Tarjetas
             if (msj.tipo === 'texto') {
-                // 1. Escaneamos si el texto de tu plantilla contiene alguna URL
-                const urlRegex = /(https?:\/\/[^\s]+)/g;
+                // 1. Escaneamos si el texto contiene una URL (incluso si no tiene https://)
+                const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
                 const urls = textoBurbuja.match(urlRegex);
 
                 if (urls && urls.length > 0) {
-                    console.log(`[Bot Nube] Enlace detectado en la secuencia. Extrayendo metadatos de: ${urls[0]}`);
+                    let urlDestino = urls[0];
+                    if (!urlDestino.startsWith('http')) urlDestino = 'https://' + urlDestino;
+
+                    console.log(`[Bot Nube] Enlace detectado: ${urlDestino}. Extrayendo metadatos...`);
                     try {
-                        // Usamos la herramienta nativa de Baileys para leer la web destino
-                        const { getUrlInfo } = require('@whiskeysockets/baileys');
-                        const linkInfo = await getUrlInfo(urls[0]); 
+                        const { getUrlInfo, generateWAMessageFromContent } = require('@whiskeysockets/baileys');
                         
+                        // 🌟 CAMUFLAJE: Nos hacemos pasar por el bot oficial de WhatsApp 
+                        // para que la web de destino no nos bloquee la lectura.
+                        const linkInfo = await getUrlInfo(urlDestino, {
+                            opts: { headers: { 'User-Agent': 'WhatsApp/2.21.12.21' } }
+                        }); 
+                        
+                        let thumbnailBuffer = null;
+
                         // 🌟 REGLA DE SUPERVIVENCIA META (< 14KB)
-                        // Si la web de destino tiene una portada muy pesada, Meta la censurará.
-                        // La interceptamos y la aplastamos con Sharp para garantizar la entrega.
-                        if (linkInfo && linkInfo.jpegThumbnail && linkInfo.jpegThumbnail.length > 14000) {
-                            linkInfo.jpegThumbnail = await sharp(linkInfo.jpegThumbnail)
+                        if (linkInfo && linkInfo.jpegThumbnail) {
+                            let calidad = 75;
+                            // Respetamos geometría original aplastando solo el ancho a 300px
+                            thumbnailBuffer = await sharp(linkInfo.jpegThumbnail)
                                 .resize({ width: 300, withoutEnlargement: true })
-                                .jpeg({ quality: 60 })
+                                .jpeg({ quality: calidad })
                                 .toBuffer();
+
+                            // Bucle de compresión extrema anti-degradación
+                            while (thumbnailBuffer.length > 14000 && calidad > 10) {
+                                calidad -= 10;
+                                thumbnailBuffer = await sharp(linkInfo.jpegThumbnail)
+                                    .resize({ width: 300, withoutEnlargement: true })
+                                    .jpeg({ quality: calidad })
+                                    .toBuffer();
+                            }
+                        } else {
+                            // Respaldo visual si la web no tiene imagen oficial
+                            thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
                         }
 
-                        // Enviamos la tarjeta perfectamente armada
-                        await whatsappSock.sendMessage(numeroDestino, { 
-                            text: textoBurbuja, 
-                            ...linkInfo 
-                        });
+                        // 🌟 ENSAMBLAJE MANUAL ESTRICTO (El traductor para Meta)
+                        // Mapeamos a mano para evitar que Baileys ignore las variables.
+                        const payloadExtended = {
+                            text: textoBurbuja, // El texto DEBE contener el link visible
+                            matchedText: urlDestino,
+                            canonicalUrl: linkInfo['canonical-url'] || urlDestino,
+                            title: linkInfo.title || "Enlace",
+                            description: linkInfo.description || "",
+                            jpegThumbnail: thumbnailBuffer
+                        };
+
+                        const mensajeProtobuf = generateWAMessageFromContent(numeroDestino, {
+                            extendedTextMessage: payloadExtended
+                        }, { userJid: whatsappSock.user.id });
+
+                        // Despacho directo al túnel
+                        await whatsappSock.relayMessage(numeroDestino, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
+                        console.log("[Bot Nube] Tarjeta de automatización enviada con éxito.");
+
                     } catch (e) {
-                        console.warn("[Bot Nube] Falló la extracción web, enviando texto plano.", e.message);
+                        console.warn("[Bot Nube] Falló extracción de link (Seguridad web). Enviando texto normal.", e.message);
                         await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
                     }
                 } else {
