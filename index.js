@@ -557,115 +557,35 @@ app.post('/send-text', async (req, res) => {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        if (linkData) {
-            let thumbnailBuffer = null;
-            let hqImageMsg = null;
-
-            if (linkData.imageUrl) {
-                try {
-                    console.log(`[Backend] Motor Híbrido procesando: ${linkData.imageUrl}`);
-                    const resImagen = await fetch(linkData.imageUrl, {
-                        headers: { 'User-Agent': 'Mozilla/5.0' }
-                    });
-                    
-                    if (resImagen.ok) {
-                        const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
-                        
-                        // 🌟 1. EL MÚSCULO (SHARP): Preprocesado ultra rápido anti-colapsos.
-                        // Hacemos el fondo blanco y redimensionamos a 800px aquí mismo.
-                        const bufferPreHQ = await sharp(originalBuffer)
-                            .resize({ width: 800, height: 800, fit: 'inside' })
-                            .flatten({ background: { r: 255, g: 255, b: 255 } })
-                            .png()
-                            .toBuffer();
-
-                        // 🌟 2. EL TRADUCTOR (JIMP v1.6+): Formato JFIF estricto para WhatsApp
-                        const { Jimp } = require('jimp'); // 🚀 IMPORTACIÓN CORREGIDA PARA V1.6+
-                        const imageHQ = await Jimp.read(bufferPreHQ);
-                        
-                        // 🚀 SINTAXIS ACTUALIZADA: getBuffer en vez de getBufferAsync
-                        const bufferHQ = await imageHQ.getBuffer('image/jpeg', { quality: 85 });
-                        
-                        // 🌟 3. SUBIDA AL CDN DE META (Fuerza el Banner Grande)
-                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
-                        const mediaUpload = await prepareWAMessageMedia(
-                            { image: bufferHQ },
-                            { upload: whatsappSock.waUploadToServer }
-                        );
-                        hqImageMsg = mediaUpload.imageMessage;
-                        console.log("[Backend] Llaves CDN generadas.");
-
-                        // 🌟 4. LA MINIATURA HD (< 45KB) 
-                        // Sharp hace el cálculo matemático de redimensionar (Mucho más rápido)
-                        const bufferThumbPre = await sharp(originalBuffer)
-                            .resize({ width: 500, height: 500, fit: 'inside' })
-                            .flatten({ background: { r: 255, g: 255, b: 255 } })
-                            .png()
-                            .toBuffer();
-
-                        const imageThumb = await Jimp.read(bufferThumbPre);
-                        let calidad = 65;
-                        
-                        // Generamos el primer intento de miniatura en JFIF antiguo
-                        thumbnailBuffer = await imageThumb.getBuffer('image/jpeg', { quality: calidad });
-                        
-                        // Bucle estricto para no pasar de los 45KB permitidos por Meta
-                        while (thumbnailBuffer.length > 45000 && calidad > 20) {
-                            calidad -= 10;
-                            // En V1.6, la calidad se pasa como parámetro dentro del getBuffer
-                            thumbnailBuffer = await imageThumb.getBuffer('image/jpeg', { quality: calidad });
-                        }
-                        console.log(`[Backend] Miniatura Híbrida lista. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
-                    }
-                } catch (e) {
-                    console.warn("[Backend] Fallo en motor híbrido. Usando respaldo.", e.message);
-                }
-            }
-
-            if (!thumbnailBuffer) {
-                thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
-            }
-
-            // =================================================================
-            // 🚀 5. ENSAMBLAJE PROTOBUF NATIVO
-            // =================================================================
-            const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
-
-            const payloadExtended = {
-                text: mensajeFinal,
-                matchedText: linkData.url,
-                canonicalUrl: linkData.url,
-                title: linkData.title,
-                description: linkData.description,
-                jpegThumbnail: thumbnailBuffer // Formato antiguo JFIF compatible 100%
-            };
-
-            if (hqImageMsg) {
-                payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
-                payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
-                payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
-                payloadExtended.mediaKey = hqImageMsg.mediaKey;
-                payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
-                
-                payloadExtended.thumbnailHeight = hqImageMsg.height;
-                payloadExtended.thumbnailWidth = hqImageMsg.width;
-            }
-
-            const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-                extendedTextMessage: payloadExtended
-            }, { userJid: whatsappSock.user.id });
-
-            await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
-
+        if (linkData && linkData.imageUrl) {
+            console.log(`[Backend] Despachando formato publicitario HD: ${linkData.imageUrl}`);
+            
+            // Unificamos el texto del CRM con el enlace en el pie de la imagen
+            const textoConLink = `${mensajeFinal}\n\n🌐 ${linkData.url}`;
+            
+            // Activamos el estado de composición multimedia
+            await whatsappSock.sendPresenceUpdate('composing', jidReal);
+            
+            // Enviamos como una imagen nativa real. 
+            // Esto jamás fallará, se verá en HD cristalino y el link es cliqueable.
+            await whatsappSock.sendMessage(jidReal, { 
+                image: { url: linkData.imageUrl }, 
+                caption: textoConLink 
+            });
+            
+            await whatsappSock.sendPresenceUpdate('paused', jidReal);
+            await guardarMensajeBD(numero, "TrueWin", textoConLink, 'out', null, linkData.imageUrl, 'image');
+            
         } else {
+            // Fallback si no hay imagen en el cuerpo del request
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
+            await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         }
 
-        await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con Protobuf:", error);
-        res.status(500).json({ error: "Fallo al enviar texto" });
+        console.error("Fallo en envío multimedia alternativo:", error);
+        res.status(500).json({ error: "Fallo al enviar mensaje" });
     }
 });
 
