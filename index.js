@@ -571,20 +571,22 @@ app.post('/send-text', async (req, res) => {
                     if (resImagen.ok) {
                         const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                         
-                        // 🌟 1. EL MÚSCULO (SHARP): Evita el Error 408 y el colapso del CPU.
-                        // Reducimos la foto de Firebase a 800px en milisegundos.
-                        const bufferPre = await sharp(originalBuffer)
+                        // 🌟 1. EL MÚSCULO (SHARP): Preprocesado ultra rápido anti-colapsos.
+                        // Hacemos el fondo blanco y redimensionamos a 800px aquí mismo.
+                        const bufferPreHQ = await sharp(originalBuffer)
                             .resize({ width: 800, height: 800, fit: 'inside' })
-                            .png() // Lo pasamos como PNG a Jimp para no perder calidad
+                            .flatten({ background: { r: 255, g: 255, b: 255 } })
+                            .png()
                             .toBuffer();
 
-                        // 🌟 2. EL TRADUCTOR (JIMP): Garantiza compatibilidad JFIF (Cero Cajas Vacías).
-                        // Como la imagen ya es de 800px, Jimp la procesará al instante sin colapsar.
-                        const image = await Jimp.read(bufferPre);
-                        image.background(0xFFFFFFFF); 
+                        // 🌟 2. EL TRADUCTOR (JIMP v1.6+): Formato JFIF estricto para WhatsApp
+                        const { Jimp } = require('jimp'); // 🚀 IMPORTACIÓN CORREGIDA PARA V1.6+
+                        const imageHQ = await Jimp.read(bufferPreHQ);
                         
-                        // 🌟 3. SUBIDA AL CDN DE META (Forzamos el diseño de Banner Grande)
-                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        // 🚀 SINTAXIS ACTUALIZADA: getBuffer en vez de getBufferAsync
+                        const bufferHQ = await imageHQ.getBuffer('image/jpeg', { quality: 85 });
+                        
+                        // 🌟 3. SUBIDA AL CDN DE META (Fuerza el Banner Grande)
                         const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
                         const mediaUpload = await prepareWAMessageMedia(
                             { image: bufferHQ },
@@ -593,18 +595,25 @@ app.post('/send-text', async (req, res) => {
                         hqImageMsg = mediaUpload.imageMessage;
                         console.log("[Backend] Llaves CDN generadas.");
 
-                        // 🌟 4. LA MINIATURA HD (La cura al pixelado)
-                        // Mantenemos la forma geométrica original (sin recortar a cuadrado) 
-                        // para que al expandirse no se vea pixelada.
-                        image.scaleToFit(500, 500); 
+                        // 🌟 4. LA MINIATURA HD (< 45KB) 
+                        // Sharp hace el cálculo matemático de redimensionar (Mucho más rápido)
+                        const bufferThumbPre = await sharp(originalBuffer)
+                            .resize({ width: 500, height: 500, fit: 'inside' })
+                            .flatten({ background: { r: 255, g: 255, b: 255 } })
+                            .png()
+                            .toBuffer();
+
+                        const imageThumb = await Jimp.read(bufferThumbPre);
                         let calidad = 65;
-                        thumbnailBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
                         
-                        // Bucle estricto < 45KB para evitar el rechazo de red
+                        // Generamos el primer intento de miniatura en JFIF antiguo
+                        thumbnailBuffer = await imageThumb.getBuffer('image/jpeg', { quality: calidad });
+                        
+                        // Bucle estricto para no pasar de los 45KB permitidos por Meta
                         while (thumbnailBuffer.length > 45000 && calidad > 20) {
                             calidad -= 10;
-                            image.quality(calidad);
-                            thumbnailBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
+                            // En V1.6, la calidad se pasa como parámetro dentro del getBuffer
+                            thumbnailBuffer = await imageThumb.getBuffer('image/jpeg', { quality: calidad });
                         }
                         console.log(`[Backend] Miniatura Híbrida lista. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
                     }
@@ -628,10 +637,9 @@ app.post('/send-text', async (req, res) => {
                 canonicalUrl: linkData.url,
                 title: linkData.title,
                 description: linkData.description,
-                jpegThumbnail: thumbnailBuffer // Formato antiguo JFIF que WhatsApp lee perfecto
+                jpegThumbnail: thumbnailBuffer // Formato antiguo JFIF compatible 100%
             };
 
-            // Inyectamos dimensiones reales para que dibuje la tarjeta panorámica
             if (hqImageMsg) {
                 payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
                 payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
