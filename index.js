@@ -491,7 +491,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: TARJETAS NATIVAS (SINTAXIS ESTRICTA BAILEYS)
+// 🌐 ENDPOINT MANUAL: TARJETAS NATIVAS CON PROTOBUF DIRECTO (NIVEL DIOS)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -529,28 +529,35 @@ app.post('/send-text', async (req, res) => {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
             }
 
-            // 🚀 2. ENSAMBLAJE NATIVO: El secreto está en envolver todo en 'linkPreview' 
-            // directamente dentro del objeto de contenido (primer parámetro).
-            await whatsappSock.sendMessage(jidReal, { 
-                text: mensajeFinal, 
-                linkPreview: {
+            // =================================================================
+            // 🚀 3. EL SECRETO: INYECCIÓN DIRECTA EN EL PROTOCOLO (Sin filtros)
+            // =================================================================
+            const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
+
+            // Armamos la estructura exacta que los servidores de Meta están esperando
+            const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
+                extendedTextMessage: {
+                    text: mensajeFinal,
                     matchedText: linkData.url,
                     canonicalUrl: linkData.url,
                     title: linkData.title,
                     description: linkData.description,
-                    jpegThumbnail: thumbnailBuffer
+                    jpegThumbnail: thumbnailBuffer // El búfer binario en crudo
                 }
-            });
+            }, { userJid: whatsappSock.user.id });
+
+            // Enviamos el paquete binario directamente al socket, ignorando la función tradicional
+            await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
-            // Sin metadatos, envío de texto plano
+            // Sin metadatos, envío de texto plano tradicional
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
 
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual:", error);
+        console.error("Fallo al enviar texto manual con Protobuf:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
