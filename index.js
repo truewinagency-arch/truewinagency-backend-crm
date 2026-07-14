@@ -494,34 +494,64 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // 🌐 ENDPOINT MANUAL: VISTA PREVIA NATIVA (100% LEGAL ANTI-SHADOWBAN)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
-    const { numero, mensaje, linkData } = req.body; // Recibimos el linkData del frontend
+    const { numero, mensaje, linkData } = req.body; 
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
     
     try {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        // 🚀 SI EL FRONTEND NOS ENVIÓ METADATOS, ARMAMOS LA TARJETA NATIVA DE META
+        // 🚀 SI EL FRONTEND NOS ENVIÓ METADATOS, ARMAMOS LA TARJETA COMPLETA
         if (linkData) {
+            let thumbnailBuffer = null;
+
+            // 1. Descargamos la imagen en caliente
+            if (linkData.imageUrl) {
+                try {
+                    const resImagen = await fetch(linkData.imageUrl, {
+                        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+                    });
+                    if (resImagen.ok) {
+                        const arrayBuffer = await resImagen.arrayBuffer();
+                        const bufferTemp = Buffer.from(arrayBuffer);
+                        
+                        // 🔒 CANDADO DE SEGURIDAD META: 
+                        // Verificamos que sea un JPEG real (Firma FF D8) y que pese menos de 64KB.
+                        if (bufferTemp[0] === 0xFF && bufferTemp[1] === 0xD8 && bufferTemp.length < 60000) {
+                            thumbnailBuffer = bufferTemp;
+                        }
+                    }
+                } catch (e) {
+                    console.warn("[Backend] Fallo al descargar imagen de metadatos.");
+                }
+            }
+
+            // 2. Búfer de Supervivencia: Si la web devolvió un PNG o una imagen muy pesada,
+            // inyectamos un micro-píxel blanco para forzar a WhatsApp a renderizar la tarjeta.
+            if (!thumbnailBuffer) {
+                thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
+            }
+
+            // 3. 🚀 ENSAMBLAJE NATIVO (Exactamente igual que la app móvil)
             await whatsappSock.sendMessage(jidReal, { 
                 text: mensajeFinal,
                 matchedText: linkData.url,
                 canonicalUrl: linkData.url,
                 title: linkData.title,
-                description: linkData.description
-                // Nota: Omitimos la imagen a propósito para eludir la barrera de los 64KB
+                description: linkData.description,
+                jpegThumbnail: thumbnailBuffer // La pieza maestra que faltaba
             }, 
-            { linkPreview: null }); // 🔒 CANDADO: Apagamos el scraper de Baileys
+            { linkPreview: null }); // Apagamos el scraper de la librería para evitar cuelgues
+
         } else {
-            // Si no hay enlaces, se va como texto normal
+            // Si no hay enlaces, texto normal
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
 
-        // El registro en la base de datos se mantiene igual
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con pre-carga:", error);
+        console.error("Fallo al enviar texto con tarjeta:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
