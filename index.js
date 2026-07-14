@@ -494,7 +494,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: HD PREVIEWS CON MOTOR SHARP (C++ MULTITHREAD)
+// 🌐 ENDPOINT MANUAL: BANNER HD CRISTALINO (SIN CDN - RECTÁNGULO PURO)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -506,13 +506,12 @@ app.post('/send-text', async (req, res) => {
 
         if (linkData) {
             let thumbnailBuffer = null;
-            let hqImageMsg = null;
-            let realWidth = 0;
-            let realHeight = 0;
+            const targetWidth = 600;
+            const targetHeight = 314; // 🌟 Proporción mágica 1.91:1 que activa el Banner Gigante
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Sharp procesando en C++: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Creando Lienzo Rectangular HD para: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0' }
                     });
@@ -521,93 +520,62 @@ app.post('/send-text', async (req, res) => {
                         const arrayBuffer = await resImagen.arrayBuffer();
                         const originalBuffer = Buffer.from(arrayBuffer);
                         
-                        // 🌟 1. EL BÚFER HD PARA LA NUBE DE META (Ultrarrápido)
-                        // fit: 'inside' reduce la imagen a max 800px manteniendo la proporción perfecta.
-                        // flatten() asegura que si es PNG, el fondo transparente se vuelva blanco.
-                        const bufferHQ = await sharp(originalBuffer)
-                            .resize({ width: 800, height: 800, fit: 'inside' })
-                            .flatten({ background: { r: 255, g: 255, b: 255 } })
-                            .jpeg({ quality: 85 })
-                            .toBuffer();
-
-                        // Extraemos la geometría exacta resultante para inyectarla en el mensaje
-                        const metadata = await sharp(bufferHQ).metadata();
-                        realWidth = metadata.width;
-                        realHeight = metadata.height;
-
-                        // Subimos la imagen HQ a Meta
-                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
-                        const mediaUpload = await prepareWAMessageMedia(
-                            { image: bufferHQ },
-                            { upload: whatsappSock.waUploadToServer }
-                        );
-                        hqImageMsg = mediaUpload.imageMessage;
-                        console.log("[Backend] Imagen HD subida al CDN con éxito.");
-
-                        // 🌟 2. LA MINIATURA HD (< 45KB) ANTI-EPIPE
+                        // 🌟 EL TRUCO GEOMÉTRICO DEFINITIVO:
+                        // Forzamos a Sharp a encajar cualquier imagen dentro de un molde de 600x314.
+                        // Si tu portada es cuadrada (1x1), le añade bordes blancos limpios a los lados sin estirarla.
+                        // Al recibir un rectángulo nativo, WhatsApp activa el Banner Grande de forma obligatoria.
                         let calidad = 75;
-                        
-                        // Primer intento de miniatura
                         thumbnailBuffer = await sharp(originalBuffer)
-                            .resize({ width: 600, height: 600, fit: 'inside' })
-                            .flatten({ background: { r: 255, g: 255, b: 255 } })
+                            .resize(targetWidth, targetHeight, {
+                                fit: 'contain',
+                                background: { r: 255, g: 255, b: 255 }
+                            })
                             .jpeg({ quality: calidad })
                             .toBuffer();
-                        
-                        // Bucle súper sónico en C++ para bajar de 45KB si hace falta
-                        while (thumbnailBuffer.length > 45000 && calidad > 20) {
+
+                        // Bucle súper sónico de seguridad anti-colapsos
+                        while (thumbnailBuffer.length > 50000 && calidad > 20) {
                             calidad -= 10;
                             thumbnailBuffer = await sharp(originalBuffer)
-                                .resize({ width: 600, height: 600, fit: 'inside' })
-                                .flatten({ background: { r: 255, g: 255, b: 255 } })
+                                .resize(targetWidth, targetHeight, {
+                                    fit: 'contain',
+                                    background: { r: 255, g: 255, b: 255 }
+                                })
                                 .jpeg({ quality: calidad })
                                 .toBuffer();
                         }
-                        console.log(`[Backend] Miniatura HD generada. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                        
+                        console.log(`[Backend] Banner HD empaquetado. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo en el motor Sharp. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo al generar el banner con Sharp:", e.message);
                 }
             }
 
-            // Respaldo de supervivencia si ocurre un error (Pixel blanco)
+            // Respaldo de supervivencia
             if (!thumbnailBuffer) {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
-                realWidth = 300;
-                realHeight = 200;
             }
 
             // =================================================================
-            // 🚀 3. ENSAMBLAJE PROTOBUF NATIVO
+            // 🚀 ENSAMBLAJE PROTOBUF NATIVO (ENTREGA 100% GARANTIZADA - DOBLE CHECK)
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
-            const payloadExtended = {
-                text: mensajeFinal,
-                matchedText: linkData.url,
-                canonicalUrl: linkData.url,
-                title: linkData.title,
-                description: linkData.description,
-                jpegThumbnail: thumbnailBuffer // La miniatura proporcionada y súper nítida
-            };
-
-            // Inyectamos las llaves de la nube y las proporciones HD
-            if (hqImageMsg) {
-                payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
-                payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
-                payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
-                payloadExtended.mediaKey = hqImageMsg.mediaKey;
-                payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
-                
-                payloadExtended.thumbnailHeight = realHeight;
-                payloadExtended.thumbnailWidth = realWidth;
-            }
-
             const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-                extendedTextMessage: payloadExtended
+                extendedTextMessage: {
+                    text: mensajeFinal,
+                    matchedText: linkData.url,
+                    canonicalUrl: linkData.url,
+                    title: linkData.title,
+                    description: linkData.description,
+                    jpegThumbnail: thumbnailBuffer, // Contiene el rectángulo nítido procesado
+                    thumbnailWidth: targetWidth,     // Confirmamos las dimensiones panorámicas exactas
+                    thumbnailHeight: targetHeight
+                }
             }, { userJid: whatsappSock.user.id });
 
-            // Envío al túnel
+            // Enviamos directo al socket sin pasar por la nube de Meta
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
@@ -617,7 +585,7 @@ app.post('/send-text', async (req, res) => {
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con Protobuf:", error);
+        console.error("Fallo al enviar texto manual con Banner HD:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
