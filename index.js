@@ -494,7 +494,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: TARJETAS NATIVAS CON PROTOBUF DIRECTO (NIVEL DIOS)
+// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (BANNER PANORÁMICO HD)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -506,11 +506,11 @@ app.post('/send-text', async (req, res) => {
 
         if (linkData) {
             let thumbnailBuffer = null;
-            let hqImageMsg = null; // Guardará las llaves de la imagen HD en la nube de Meta
+            let hqImageMsg = null; 
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Descargando imagen original de catálogo: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Descargando imagen para Banner HD: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
                     });
@@ -519,24 +519,35 @@ app.post('/send-text', async (req, res) => {
                         const arrayBuffer = await resImagen.arrayBuffer();
                         const bufferOriginal = Buffer.from(arrayBuffer);
                         
-                        // 🚀 1. MAGIA NATIVA: Subimos la imagen en ALTA CALIDAD al CDN de WhatsApp
+                        const image = await Jimp.read(bufferOriginal);
+                        
+                        // 🌟 1. EXTRAEMOS DIMENSIONES REALES
+                        // WhatsApp usa esto para saber si debe dibujar un Banner gigante o un cuadro pequeño.
+                        const originalWidth = image.bitmap.width;
+                        const originalHeight = image.bitmap.height;
+
+                        // 🌟 2. SUBIMOS EL ARCHIVO HD AL CDN DE META
                         const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
                         const mediaUpload = await prepareWAMessageMedia(
                             { image: bufferOriginal },
                             { upload: whatsappSock.waUploadToServer }
                         );
                         hqImageMsg = mediaUpload.imageMessage;
-                        console.log("[Backend] Imagen HQ subida al CDN de Meta exitosamente.");
+                        
+                        // Guardamos las medidas reales en el objeto para el Protobuf
+                        hqImageMsg.realWidth = originalWidth;
+                        hqImageMsg.realHeight = originalHeight;
 
-                        // 2. CREAMOS LA MINIATURA LIGERA (<64KB) PARA CARGA RÁPIDA (Requisito del protocolo)
-                        const image = await Jimp.read(bufferOriginal);
-                        image.background(0xFFFFFFFF).cover(300, 300).quality(65);
+                        // 🌟 3. COMPRESIÓN SIN DEFORMAR (El secreto del Banner)
+                        // Usamos scaleToFit en lugar de cover. Esto reduce el peso pero mantiene 
+                        // el aspect ratio original (ej. 16:9), evitando el rechazo de Meta.
+                        image.background(0xFFFFFFFF).scaleToFit(640, 640).quality(60);
                         let bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
                         
                         if (bufferProcesado.length < 64000) {
                             thumbnailBuffer = bufferProcesado;
                         } else {
-                            image.quality(40);
+                            image.quality(35); // Compresión agresiva si sigue pesado
                             thumbnailBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
                         }
                     }
@@ -545,36 +556,34 @@ app.post('/send-text', async (req, res) => {
                 }
             }
 
-            // Búfer de supervivencia si ocurre un error de red
             if (!thumbnailBuffer) {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
             }
 
             // =================================================================
-            // 🚀 3. ENSAMBLAJE PROTOBUF NATIVO (EL TRUCO FINAL)
+            // 🚀 ENSAMBLAJE PROTOBUF NATIVO
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
-            // Construimos la base del mensaje enriquecido
             const payloadExtended = {
                 text: mensajeFinal,
                 matchedText: linkData.url,
                 canonicalUrl: linkData.url,
                 title: linkData.title,
                 description: linkData.description,
-                jpegThumbnail: thumbnailBuffer // Miniatura para carga instantánea
+                jpegThumbnail: thumbnailBuffer 
             };
 
-            // 🌟 LA CLAVE: Si logramos subir la imagen a Meta, inyectamos los apuntadores
-            // Esto es lo que le ordena al celular del cliente: "Expande la tarjeta y muestra la imagen grande"
             if (hqImageMsg) {
                 payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
                 payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
                 payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
                 payloadExtended.mediaKey = hqImageMsg.mediaKey;
                 payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
-                payloadExtended.thumbnailHeight = hqImageMsg.height;
-                payloadExtended.thumbnailWidth = hqImageMsg.width;
+                
+                // 🚀 INYECTAMOS LAS PROPORCIONES EXACTAS DE LA IMAGEN EN LA NUBE
+                payloadExtended.thumbnailHeight = hqImageMsg.realHeight;
+                payloadExtended.thumbnailWidth = hqImageMsg.realWidth;
             }
 
             const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
@@ -584,7 +593,6 @@ app.post('/send-text', async (req, res) => {
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
-            // Sin metadatos, envío de texto plano
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
 
