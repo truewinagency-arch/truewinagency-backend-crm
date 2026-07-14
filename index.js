@@ -491,7 +491,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: VISTA PREVIA NATIVA (100% LEGAL ANTI-SHADOWBAN)
+// 🌐 ENDPOINT MANUAL: TARJETAS NATIVAS (SINTAXIS ESTRICTA BAILEYS)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -529,22 +529,18 @@ app.post('/send-text', async (req, res) => {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
             }
 
-            // 🚀 2. ENSAMBLAJE NATIVO: El secreto está en los parámetros
-            await whatsappSock.sendMessage(
-                jidReal, 
-                { text: mensajeFinal }, // Argumento 1: El contenido base (Solo texto)
-                { 
-                    // Argumento 2: Opciones. Le inyectamos la metadata pre-fabricada aquí.
-                    // Al pasar un objeto, Baileys apaga su scraper interno automáticamente y usa esto.
-                    linkPreview: {
-                        matchedText: linkData.url,
-                        canonicalUrl: linkData.url,
-                        title: linkData.title,
-                        description: linkData.description,
-                        jpegThumbnail: thumbnailBuffer // La magia ocurre aquí
-                    }
+            // 🚀 2. ENSAMBLAJE NATIVO: El secreto está en envolver todo en 'linkPreview' 
+            // directamente dentro del objeto de contenido (primer parámetro).
+            await whatsappSock.sendMessage(jidReal, { 
+                text: mensajeFinal, 
+                linkPreview: {
+                    matchedText: linkData.url,
+                    canonicalUrl: linkData.url,
+                    title: linkData.title,
+                    description: linkData.description,
+                    jpegThumbnail: thumbnailBuffer
                 }
-            );
+            });
 
         } else {
             // Sin metadatos, envío de texto plano
