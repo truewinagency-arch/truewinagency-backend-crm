@@ -555,7 +555,7 @@ app.post('/send-text', async (req, res) => {
 
                         // 2. CREAMOS LA MINIATURA DE CARGA RÁPIDA (Sin deformar, anti-pixelado)
                         const thumbImage = image.clone();
-                        thumbImage.scaleToFit(800, 800).quality(80); 
+                        thumbImage.scaleToFit(600, 600).quality(80); 
                         let bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
                         
                         if (bufferProcesado.length < 64000) {
