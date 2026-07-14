@@ -494,7 +494,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: ARQUITECTURA NATIVA (CERO CAJAS VACÍAS Y SIN 408)
+// 🌐 ENDPOINT MANUAL: EL MOTOR HÍBRIDO (SHARP + JIMP) 100% ESTABLE
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -510,7 +510,7 @@ app.post('/send-text', async (req, res) => {
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Descargando imagen nativa: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Motor Híbrido procesando: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0' }
                     });
@@ -518,41 +518,45 @@ app.post('/send-text', async (req, res) => {
                     if (resImagen.ok) {
                         const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                         
-                        // 🌟 1. SUBIDA DIRECTA AL CDN (Tu método original exitoso)
-                        // Enviamos el búfer original intacto para que WhatsApp detecte las proporciones reales.
+                        // 🌟 1. EL MÚSCULO (SHARP): Evita el Error 408 y el colapso del CPU.
+                        // Reducimos la foto de Firebase a 800px en milisegundos.
+                        const bufferPre = await sharp(originalBuffer)
+                            .resize({ width: 800, height: 800, fit: 'inside' })
+                            .png() // Lo pasamos como PNG a Jimp para no perder calidad
+                            .toBuffer();
+
+                        // 🌟 2. EL TRADUCTOR (JIMP): Garantiza compatibilidad JFIF (Cero Cajas Vacías).
+                        // Como la imagen ya es de 800px, Jimp la procesará al instante sin colapsar.
+                        const image = await Jimp.read(bufferPre);
+                        image.background(0xFFFFFFFF); 
+                        
+                        // 🌟 3. SUBIDA AL CDN DE META (Forzamos el diseño de Banner Grande)
+                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
                         const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
                         const mediaUpload = await prepareWAMessageMedia(
-                            { image: originalBuffer },
+                            { image: bufferHQ },
                             { upload: whatsappSock.waUploadToServer }
                         );
                         hqImageMsg = mediaUpload.imageMessage;
-                        console.log("[Backend] Llaves CDN generadas exitosamente.");
+                        console.log("[Backend] Llaves CDN generadas.");
 
-                        // 🌟 2. LA MINIATURA DE SUPERVIVENCIA (< 15 KB ESTRICTO)
-                        // Mantenemos 600px de ancho para nitidez, pero comprimimos fuerte 
-                        // para burlar el borrado silencioso del celular.
-                        let calidad = 60;
-                        thumbnailBuffer = await sharp(originalBuffer)
-                            // withoutEnlargement mantiene tu aspecto original (sea 1:1 o 16:9) sin deformar
-                            .resize({ width: 600, withoutEnlargement: true }) 
-                            .flatten({ background: { r: 255, g: 255, b: 255 } })
-                            .jpeg({ quality: calidad, progressive: false })
-                            .toBuffer();
-
-                        // Bucle estricto: Bajar a menos de 15 KB
-                        while (thumbnailBuffer.length > 15000 && calidad > 10) {
-                            calidad -= 10;
-                            thumbnailBuffer = await sharp(originalBuffer)
-                                .resize({ width: 600, withoutEnlargement: true })
-                                .flatten({ background: { r: 255, g: 255, b: 255 } })
-                                .jpeg({ quality: calidad, progressive: false })
-                                .toBuffer();
-                        }
+                        // 🌟 4. LA MINIATURA HD (La cura al pixelado)
+                        // Mantenemos la forma geométrica original (sin recortar a cuadrado) 
+                        // para que al expandirse no se vea pixelada.
+                        image.scaleToFit(500, 500); 
+                        let calidad = 65;
+                        thumbnailBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
                         
-                        console.log(`[Backend] Miniatura blindada. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                        // Bucle estricto < 45KB para evitar el rechazo de red
+                        while (thumbnailBuffer.length > 45000 && calidad > 20) {
+                            calidad -= 10;
+                            image.quality(calidad);
+                            thumbnailBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        }
+                        console.log(`[Backend] Miniatura Híbrida lista. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo en el motor. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo en motor híbrido. Usando respaldo.", e.message);
                 }
             }
 
@@ -561,7 +565,7 @@ app.post('/send-text', async (req, res) => {
             }
 
             // =================================================================
-            // 🚀 3. ENSAMBLAJE PROTOBUF EXACTO
+            // 🚀 5. ENSAMBLAJE PROTOBUF NATIVO
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
@@ -571,10 +575,10 @@ app.post('/send-text', async (req, res) => {
                 canonicalUrl: linkData.url,
                 title: linkData.title,
                 description: linkData.description,
-                jpegThumbnail: thumbnailBuffer 
+                jpegThumbnail: thumbnailBuffer // Formato antiguo JFIF que WhatsApp lee perfecto
             };
 
-            // Inyectamos las llaves de la nube y las dimensiones EXACTAS de la imagen original
+            // Inyectamos dimensiones reales para que dibuje la tarjeta panorámica
             if (hqImageMsg) {
                 payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
                 payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
@@ -590,7 +594,6 @@ app.post('/send-text', async (req, res) => {
                 extendedTextMessage: payloadExtended
             }, { userJid: whatsappSock.user.id });
 
-            // Envío asegurado
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
