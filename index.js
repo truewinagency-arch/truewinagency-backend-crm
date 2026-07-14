@@ -835,10 +835,8 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
     let thumbnailBuffer = null;
 
-    // 🌟 REGLA 1: El enlace DEBE ser parte visible del texto de la burbuja.
     let textoVisible = mensajeFinal || "";
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
-        // Si no incluiste el link en el texto, lo concatenamos al final automáticamente
         textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
     }
 
@@ -851,14 +849,11 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
                 const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                 let calidad = 75;
                 
-                // 🌟 REGLA 2: Límite estricto de 14 KB y Cero Bordes Blancos.
-                // Reducimos el ancho a 300px (sin forzar altura, para mantener tu proporción).
                 thumbnailBuffer = await sharp(originalBuffer)
                     .resize({ width: 300, withoutEnlargement: true })
                     .jpeg({ quality: calidad })
                     .toBuffer();
 
-                // Bucle de compresión extrema para evadir el borrado de Meta
                 while (thumbnailBuffer.length > 14000 && calidad > 10) {
                     calidad -= 10;
                     thumbnailBuffer = await sharp(originalBuffer)
@@ -873,25 +868,24 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
         }
     }
 
-    // Respaldo base64
-    if (!thumbnailBuffer) {
-        thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
-    }
-
-    // =================================================================
-    // 🚀 ENSAMBLAJE PROTOBUF EXACTO
-    // =================================================================
     const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
+    // Ensamblamos los datos obligatorios
+    const payloadExtended = {
+        text: textoVisible, 
+        matchedText: linkData.url,
+        canonicalUrl: linkData.url,
+        title: linkData.title || "Enlace",
+        description: linkData.description || ""
+    };
+
+    // Solo inyectamos la imagen si se generó bien (evita que WhatsApp borre la tarjeta)
+    if (thumbnailBuffer) {
+        payloadExtended.jpegThumbnail = thumbnailBuffer;
+    }
+
     const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-        extendedTextMessage: {
-            text: textoVisible, // <-- Ahora contiene el link obligatorio
-            matchedText: linkData.url,
-            canonicalUrl: linkData.url,
-            title: linkData.title || "Enlace Oficial",
-            description: linkData.description || "",
-            jpegThumbnail: thumbnailBuffer // <-- Ahora pesa menos de 14 KB
-        }
+        extendedTextMessage: payloadExtended
     }, { userJid: whatsappSock.user.id });
 
     await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
@@ -974,6 +968,36 @@ async function procesarBotEnNube(numeroCliente, textoMensaje) {
     }
 }
 
+// =========================================================================
+// 🚀 RASTREADOR WEB (AUTO-METADATOS PARA EL CRM)
+// =========================================================================
+async function extraerMetadatos(urlStr) {
+    try {
+        let urlFinal = urlStr.startsWith('http') ? urlStr : 'https://' + urlStr;
+        
+        // Entramos a la web simulando ser un navegador Chrome de PC para que no nos bloqueen
+        const res = await fetch(urlFinal, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        });
+        const html = await res.text();
+
+        // Extraemos las etiquetas SEO oficiales
+        const titleMatch = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i) || html.match(/<title>([^<]+)<\/title>/i);
+        const descMatch = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]+)"/i) || html.match(/<meta[^>]*name="description"[^>]*content="([^"]+)"/i);
+        const imgMatch = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/i);
+
+        return {
+            url: urlFinal,
+            title: titleMatch ? titleMatch[1] : "Enlace Oficial",
+            description: descMatch ? descMatch[1] : "",
+            imageUrl: imgMatch ? imgMatch[1] : null
+        };
+    } catch (e) {
+        console.warn("[Scraper] Fallo al leer la web:", e.message);
+        return { url: urlStr, title: "Visitar Enlace", description: "", imageUrl: null };
+    }
+}
+
 // 🚀 DESPACHADOR ASÍNCRONO EN NUBE: Ejecuta secuencias con pausas humanas anti-ban
 async function despacharFlujoDesdeNube(numeroDestino, tpl) {
     const pause = (ms) => new Promise(res => setTimeout(res, ms));
@@ -1029,74 +1053,22 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             } catch (e) { }
 
             // 🚀 DISPARO CORREGIDO: Integración del Motor de Tarjetas
-            if (msj.tipo === 'texto') {
-                // 1. Escaneamos si el texto contiene una URL (incluso si no tiene https://)
-                const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
+           if (msj.tipo === 'texto') {
+                // Escaneamos si el texto puro tiene un link (ej: bingowin.app o https://...)
+                const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
                 const urls = textoBurbuja.match(urlRegex);
 
                 if (urls && urls.length > 0) {
-                    let urlDestino = urls[0];
-                    if (!urlDestino.startsWith('http')) urlDestino = 'https://' + urlDestino;
-
-                    console.log(`[Bot Nube] Enlace detectado: ${urlDestino}. Extrayendo metadatos...`);
-                    try {
-                        const { getUrlInfo, generateWAMessageFromContent } = require('@whiskeysockets/baileys');
-                        
-                        // 🌟 CAMUFLAJE: Nos hacemos pasar por el bot oficial de WhatsApp 
-                        // para que la web de destino no nos bloquee la lectura.
-                        const linkInfo = await getUrlInfo(urlDestino, {
-                            opts: { headers: { 'User-Agent': 'WhatsApp/2.21.12.21' } }
-                        }); 
-                        
-                        let thumbnailBuffer = null;
-
-                        // 🌟 REGLA DE SUPERVIVENCIA META (< 14KB)
-                        if (linkInfo && linkInfo.jpegThumbnail) {
-                            let calidad = 75;
-                            // Respetamos geometría original aplastando solo el ancho a 300px
-                            thumbnailBuffer = await sharp(linkInfo.jpegThumbnail)
-                                .resize({ width: 300, withoutEnlargement: true })
-                                .jpeg({ quality: calidad })
-                                .toBuffer();
-
-                            // Bucle de compresión extrema anti-degradación
-                            while (thumbnailBuffer.length > 14000 && calidad > 10) {
-                                calidad -= 10;
-                                thumbnailBuffer = await sharp(linkInfo.jpegThumbnail)
-                                    .resize({ width: 300, withoutEnlargement: true })
-                                    .jpeg({ quality: calidad })
-                                    .toBuffer();
-                            }
-                        } else {
-                            // Respaldo visual si la web no tiene imagen oficial
-                            thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
-                        }
-
-                        // 🌟 ENSAMBLAJE MANUAL ESTRICTO (El traductor para Meta)
-                        // Mapeamos a mano para evitar que Baileys ignore las variables.
-                        const payloadExtended = {
-                            text: textoBurbuja, // El texto DEBE contener el link visible
-                            matchedText: urlDestino,
-                            canonicalUrl: linkInfo['canonical-url'] || urlDestino,
-                            title: linkInfo.title || "Enlace",
-                            description: linkInfo.description || "",
-                            jpegThumbnail: thumbnailBuffer
-                        };
-
-                        const mensajeProtobuf = generateWAMessageFromContent(numeroDestino, {
-                            extendedTextMessage: payloadExtended
-                        }, { userJid: whatsappSock.user.id });
-
-                        // Despacho directo al túnel
-                        await whatsappSock.relayMessage(numeroDestino, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
-                        console.log("[Bot Nube] Tarjeta de automatización enviada con éxito.");
-
-                    } catch (e) {
-                        console.warn("[Bot Nube] Falló extracción de link (Seguridad web). Enviando texto normal.", e.message);
-                        await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
-                    }
+                    const linkDetectado = urls[0];
+                    console.log(`[Bot Nube] Link detectado en el texto: ${linkDetectado}. Extrayendo info...`);
+                    
+                    // 1. Extraemos los datos de la web automáticamente
+                    const linkDataInfo = await extraerMetadatos(linkDetectado);
+                    
+                    // 2. Mandamos la tarjeta usando la Fábrica manual que ya sabemos que funciona
+                    await enviarTarjetaEnlace(numeroDestino, textoBurbuja, linkDataInfo);
                 } else {
-                    // Si es un texto normal sin links, se envía normal
+                    // Si es un texto sin enlaces, enviamos normal
                     await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
                 }
 
