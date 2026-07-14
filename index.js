@@ -510,62 +510,37 @@ app.post('/send-text', async (req, res) => {
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Descargando imagen original: ${linkData.imageUrl}`);
-                    const resImagen = await fetch(linkData.imageUrl, {
-                        headers: { 'User-Agent': 'Mozilla/5.0' }
-                    });
+                    console.log(`[Backend] Tercerizando procesamiento HD para: ${linkData.imageUrl}`);
                     
-                    if (resImagen.ok) {
-                        const arrayBuffer = await resImagen.arrayBuffer();
-                        
-                        // 1. LEEMOS LA IMAGEN
-                        const image = await Jimp.read(Buffer.from(arrayBuffer));
-                        image.background(0xFFFFFFFF); 
-                        
-                        // 🚀 LA CURA CONTRA EL ERROR 428 (Connection Terminated)
-                        // Si la imagen original de Firebase es gigante, el encriptador de WhatsApp
-                        // bloquea el procesador causando la desconexión. 
-                        // Reducimos el original a un máximo de 900px ANTES de encriptar.
-                        // Sigue siendo HD altísimo para celulares, pero no tumba tu servidor.
-                        if (image.bitmap.width > 900 || image.bitmap.height > 900) {
-                            image.scaleToFit(900, 900);
-                        }
+                    // 🚀 EL TRUCO MAESTRO: WSRV.NL (Procesamiento en la nube)
+                    // Le pedimos a un servidor externo gigante que haga el trabajo por nosotros.
+                    // fit=contain & cbg=white encajan cualquier foto (cuadrada o larga) 
+                    // en un lienzo perfecto para forzar el Banner Gigante de WhatsApp.
+                    const urlCodificada = encodeURIComponent(linkData.imageUrl);
+                    
+                    // 1. OBTENEMOS EL BÚFER HD (Para la nube de Meta) - 800x418 (Ratio 1.91:1) Calidad 80%
+                    const urlHQ = `https://wsrv.nl/?url=${urlCodificada}&w=800&h=418&fit=contain&cbg=white&output=jpg&q=80`;
+                    const resHQ = await fetch(urlHQ);
+                    
+                    // 2. OBTENEMOS LA MINIATURA RÁPIDA (Para el Protobuf) - 600x314 Calidad 40% (Garantiza < 50KB)
+                    const urlThumb = `https://wsrv.nl/?url=${urlCodificada}&w=600&h=314&fit=contain&cbg=white&output=jpg&q=40`;
+                    const resThumb = await fetch(urlThumb);
 
-                        // 2. EXTRAEMOS EL BÚFER HD (Ahora súper ligero para la CPU)
-                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
+                    if (resHQ.ok && resThumb.ok) {
+                        const bufferHQ = Buffer.from(await resHQ.arrayBuffer());
+                        thumbnailBuffer = Buffer.from(await resThumb.arrayBuffer());
 
-                        // 3. SUBIMOS AL CDN DE META (Pasará rapidísimo sin congelar el socket)
+                        // 3. SUBIMOS AL CDN DE META (Ahora es instantáneo, Render no calculó nada)
                         const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
                         const mediaUpload = await prepareWAMessageMedia(
                             { image: bufferHQ },
                             { upload: whatsappSock.waUploadToServer }
                         );
                         hqImageMsg = mediaUpload.imageMessage;
-                        console.log("[Backend] Llaves CDN generadas exitosamente.");
-
-                        // =================================================================
-                        // 🚀 4. LA MINIATURA HD (< 60KB) SIN DEFORMAR
-                        // =================================================================
-                        const thumbImage = image.clone();
-                        
-                        // Usamos scaleToFit para mantener la forma geométrica de tu foto original
-                        // sin estirarla, y le damos 600px de ancho (HD para pantallas pequeñas).
-                        thumbImage.scaleToFit(600, 600); 
-                        
-                        let calidad = 70;
-                        let bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
-                        
-                        // Bucle de compresión de seguridad para evitar Error EPIPE
-                        while (bufferProcesado.length > 55000 && calidad > 20) {
-                            calidad -= 10;
-                            thumbImage.quality(calidad);
-                            bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
-                        }
-                        thumbnailBuffer = bufferProcesado;
-                        console.log(`[Backend] Miniatura HD generada. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                        console.log(`[Backend] Llaves generadas. Peso Thumb: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo en el motor de renderizado. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo en el CDN externo de imágenes. Usando respaldo.", e.message);
                 }
             }
 
@@ -574,7 +549,7 @@ app.post('/send-text', async (req, res) => {
             }
 
             // =================================================================
-            // 🚀 5. ENSAMBLAJE PROTOBUF NATIVO
+            // 🚀 ENSAMBLAJE PROTOBUF NATIVO
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
@@ -584,10 +559,10 @@ app.post('/send-text', async (req, res) => {
                 canonicalUrl: linkData.url,
                 title: linkData.title,
                 description: linkData.description,
-                jpegThumbnail: thumbnailBuffer // Miniatura limpia y proporcionada
+                jpegThumbnail: thumbnailBuffer // Viene directo del CDN externo, nítido y proporcionado
             };
 
-            // Inyectamos las llaves de la nube para el diseño ancho HD
+            // Inyectamos las llaves HD
             if (hqImageMsg) {
                 payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
                 payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
