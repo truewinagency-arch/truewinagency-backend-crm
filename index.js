@@ -532,13 +532,13 @@ app.post('/send-text', async (req, res) => {
                         // dentro de un contenedor estándar de 600x314 para forzar el Banner Gigante de Meta.
                         if (ratio < 1.4 || ratio > 2.2) {
                             console.log(`[Backend] Proporción inusual (${ratio.toFixed(2)}:1). Adaptando a lienzo panorámico...`);
-                            image.contain(600, 314);
-                            finalWidth = 600;
-                            finalHeight = 314;
+                            image.contain(1080, 1280);
+                            finalWidth = 1080;
+                            finalHeight = 1280;
                         } else {
                             // Si ya es panorámica nativa, la escalamos a un ancho máximo óptimo de 800px
                             if (originalWidth > 800) {
-                                image.scaleToFit(800, 800);
+                                image.scaleToFit(1080, 1080);
                             }
                             finalWidth = image.bitmap.width;
                             finalHeight = image.bitmap.height;
