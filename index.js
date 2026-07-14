@@ -494,7 +494,7 @@ app.get('/status', (req, res) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: EL ENGAÑO GEOMÉTRICO (BANNER GIGANTE 100% ESTABLE)
+// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (CDN + ANTI-PIXELADO)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
@@ -506,39 +506,54 @@ app.post('/send-text', async (req, res) => {
 
         if (linkData) {
             let thumbnailBuffer = null;
+            let hqImageMsg = null;
+            let realWidth = 0;
+            let realHeight = 0;
 
             if (linkData.imageUrl) {
                 try {
-                    console.log(`[Backend] Descargando y forzando geometría para Banner: ${linkData.imageUrl}`);
+                    console.log(`[Backend] Descargando imagen original de catálogo: ${linkData.imageUrl}`);
                     const resImagen = await fetch(linkData.imageUrl, {
                         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
                     });
                     
                     if (resImagen.ok) {
                         const arrayBuffer = await resImagen.arrayBuffer();
+                        
+                        // 1. LEEMOS LA IMAGEN Y LA PURIFICAMOS A JPEG
                         const image = await Jimp.read(Buffer.from(arrayBuffer));
+                        image.background(0xFFFFFFFF); // Evita el bug de transparencia si era PNG
                         
-                        // 🌟 1. EL TRUCO GEOMÉTRICO (La clave del Banner Gigante)
-                        // Ponemos fondo blanco (elimina transparencias PNG).
-                        // Usamos '.contain(600, 314)' para meter tu portada cuadrada dentro de 
-                        // un rectángulo perfecto de 1.91:1 sin recortar ni deformar tus textos.
-                        // Al ver un rectángulo, WhatsApp activará el modo panorámico obligatoriamente.
-                        image.background(0xFFFFFFFF)
-                             .contain(600, 314) 
-                             .quality(65);
+                        // Guardamos las medidas reales para evitar el pixelado por estiramiento
+                        realWidth = image.bitmap.width;
+                        realHeight = image.bitmap.height;
 
-                        let bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        // 2. SUBIMOS AL CDN DE META EN ALTA CALIDAD (Tu lógica original)
+                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+                        const mediaUpload = await prepareWAMessageMedia(
+                            { image: bufferHQ },
+                            { upload: whatsappSock.waUploadToServer }
+                        );
+                        hqImageMsg = mediaUpload.imageMessage;
+                        console.log("[Backend] Imagen HQ subida al CDN de Meta exitosamente.");
+
+                        // 3. CREAMOS LA MINIATURA LIGERA (<64KB) SIN DEFORMAR (La cura al pixelado)
+                        const thumbImage = image.clone();
+                        // Usamos scaleToFit para mantener la proporción exacta. 
+                        // Así WhatsApp no la estira a la fuerza.
+                        thumbImage.scaleToFit(400, 400).quality(60); 
+                        let bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
                         
-                        // 🌟 2. PROTECCIÓN DE PESO (<60KB para envíos ultrarrápidos)
-                        if (bufferProcesado.length > 60000) {
-                            image.quality(40);
-                            bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        if (bufferProcesado.length < 64000) {
+                            thumbnailBuffer = bufferProcesado;
+                        } else {
+                            thumbImage.quality(35);
+                            thumbnailBuffer = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
                         }
-                        
-                        thumbnailBuffer = bufferProcesado;
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo en el motor geométrico. Usando respaldo.", e.message);
+                    console.warn("[Backend] Fallo en el motor de Alta Resolución. Usando respaldo.", e.message);
                 }
             }
 
@@ -547,7 +562,7 @@ app.post('/send-text', async (req, res) => {
             }
 
             // =================================================================
-            // 🚀 3. ENSAMBLAJE PROTOBUF (SIN NUBE, CERO TRANSPARENCIAS)
+            // 🚀 4. ENSAMBLAJE PROTOBUF NATIVO
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
@@ -557,22 +572,32 @@ app.post('/send-text', async (req, res) => {
                 canonicalUrl: linkData.url,
                 title: linkData.title,
                 description: linkData.description,
-                jpegThumbnail: thumbnailBuffer, // Tu foto ya procesada a rectángulo
-                thumbnailWidth: 600,  // Le confirmamos a WhatsApp que es apaisada
-                thumbnailHeight: 314
+                jpegThumbnail: thumbnailBuffer
             };
+
+            // Inyectamos las llaves de la nube y las proporciones exactas
+            if (hqImageMsg) {
+                payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
+                payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
+                payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
+                payloadExtended.mediaKey = hqImageMsg.mediaKey;
+                payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+                
+                // Usamos las dimensiones reales de Jimp en vez de las de Baileys que a veces fallan
+                payloadExtended.thumbnailHeight = realHeight;
+                payloadExtended.thumbnailWidth = realWidth;
+            }
 
             const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
                 extendedTextMessage: payloadExtended
             }, { userJid: whatsappSock.user.id });
 
-            // Enviamos el mensaje directo, sin chocar con las llaves de Meta
             await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 
         } else {
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
-        
+
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
