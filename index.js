@@ -494,21 +494,34 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // 🌐 ENDPOINT MANUAL: VISTA PREVIA NATIVA (100% LEGAL ANTI-SHADOWBAN)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
-    const { numero, mensaje } = req.body;
+    const { numero, mensaje, linkData } = req.body; // Recibimos el linkData del frontend
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
     
     try {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        // 🚀 CANDADO ANTI-BAN 3: Enviar mensaje estructurado legalmente
-        // Sin forzar metadatos privados de Meta, para que el número no sea marcado como spammer.
-        await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
+        // 🚀 SI EL FRONTEND NOS ENVIÓ METADATOS, ARMAMOS LA TARJETA NATIVA DE META
+        if (linkData) {
+            await whatsappSock.sendMessage(jidReal, { 
+                text: mensajeFinal,
+                matchedText: linkData.url,
+                canonicalUrl: linkData.url,
+                title: linkData.title,
+                description: linkData.description
+                // Nota: Omitimos la imagen a propósito para eludir la barrera de los 64KB
+            }, 
+            { linkPreview: null }); // 🔒 CANDADO: Apagamos el scraper de Baileys
+        } else {
+            // Si no hay enlaces, se va como texto normal
+            await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
+        }
 
+        // El registro en la base de datos se mantiene igual
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual:", error);
+        console.error("Fallo al enviar texto manual con pre-carga:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
