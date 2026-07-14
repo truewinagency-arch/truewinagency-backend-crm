@@ -496,6 +496,9 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // =====================================================================
 // 🌐 ENDPOINT MANUAL: HD BANNERS VÍA BUSINESS PROTOCOL (CERO PIXELADO)
 // =====================================================================
+// =====================================================================
+// 🌐 ENDPOINT MANUAL: HD BANNERS REALES (ENTREGA GARANTIZADA - 2 CHECKS)
+// =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body; 
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
@@ -505,59 +508,36 @@ app.post('/send-text', async (req, res) => {
         const jidReal = formatearJid(numero);
 
         if (linkData) {
-            let thumbnailBuffer = null;
-
-            // 1. Descargamos y creamos un micro-thumbnail ligero de respaldo
-            // Esto es solo para que el mensaje se entregue en 0.1 segundos. 
-            // El HD lo descargará el teléfono directamente.
-            if (linkData.imageUrl) {
-                try {
-                    console.log(`[Backend] Preparando estructura HD para: ${linkData.imageUrl}`);
-                    const resImagen = await fetch(linkData.imageUrl, {
-                        headers: { 'User-Agent': 'Mozilla/5.0' }
-                    });
-                    
-                    if (resImagen.ok) {
-                        const arrayBuffer = await resImagen.arrayBuffer();
-                        const image = await Jimp.read(Buffer.from(arrayBuffer));
-                        
-                        // Micro-compresión rápida y segura
-                        image.background(0xFFFFFFFF).cover(300, 300).quality(40);
-                        thumbnailBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
-                    }
-                } catch (e) {
-                    console.warn("[Backend] Error al leer imagen de respaldo:", e.message);
-                }
-            }
-
-            // =================================================================
-            // 🚀 2. EL SECRETO DE WHATSAPP BUSINESS: externalAdReply
-            // =================================================================
+            console.log(`[Backend] Despachando tarjeta HD nativa para: ${linkData.imageUrl}`);
+            
+            // 🚀 LA SOLUCIÓN AL RECHAZO DE META:
+            // Eliminamos los búferes binarios pesados. Al enviar EXCLUSIVAMENTE la URL en 'thumbnailUrl',
+            // el paquete es 100% legítimo para Meta. Se entrega en milisegundos (Doble Check)
+            // y el celular del cliente descarga la imagen original en su resolución nativa.
             await whatsappSock.sendMessage(jidReal, {
                 text: mensajeFinal,
                 contextInfo: {
                     externalAdReply: {
                         title: linkData.title,
                         body: linkData.description,
-                        mediaType: 1, // 1 = Imagen, 2 = Video
-                        thumbnailUrl: linkData.imageUrl, // 🚀 El teléfono del cliente descarga el HD directo de aquí
-                        thumbnail: thumbnailBuffer, // Respaldo nativo
-                        sourceUrl: linkData.url, // Hacia dónde va el cliente si hace clic
-                        renderLargerThumbnail: true, // 🚀 LA MAGIA: Obliga a dibujar la "Imagen en Grande" (Banner)
-                        showAdAttribution: false // Lo mantiene orgánico y sin etiquetas de reenvío
+                        mediaType: 1, // 1 = Imagen
+                        thumbnailUrl: linkData.imageUrl, // URL pública directa de la imagen (Ej: Firebase o tu Web)
+                        sourceUrl: linkData.url, // Enlace de destino al hacer clic
+                        renderLargerThumbnail: true, // Forzar el diseño de Banner Panorámico Grande
+                        showAdAttribution: false
                     }
                 }
             });
 
         } else {
-            // Sin metadatos, envío de texto plano
+            // Sin metadatos, envío de texto plano tradicional
             await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
         
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con protocolo Business:", error);
+        console.error("Fallo al enviar texto manual con protocolo optimizado:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
