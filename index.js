@@ -9,6 +9,8 @@ const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore'); 
 const serviceAccount = require('./firebase-credentials.json');
 
+
+
 // =========================================================================
 // 0. DETECTORES DE ERRORES CRÍTICOS (Anti-colapsos silenciosos)
 // =========================================================================
@@ -28,6 +30,7 @@ const coleccionSesion = db.collection('crm_whatsapp_session');
 const coleccionMensajes = db.collection('crm_mensajes');
 const coleccionPlantillas = db.collection('crm_plantillas'); // 🚀 NUEVA BASE PARA PLANTILL
 
+const Jimp = require('jimp');
 // 🚀 DETECTOR DEL NÚMERO CONECTADO ACTUALMENTE AL SERVIDOR
 function getHostNumber() {
     if (whatsappSock && whatsappSock.user && whatsappSock.user.id) {
@@ -507,24 +510,37 @@ app.post('/send-text', async (req, res) => {
             // 1. Descargamos la imagen del frontend en RAM
             if (linkData.imageUrl) {
                 try {
-                    const resImagen = await fetch(linkData.imageUrl, {
-                        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-                    });
-                    if (resImagen.ok) {
-                        const arrayBuffer = await resImagen.arrayBuffer();
-                        const bufferTemp = Buffer.from(arrayBuffer);
-                        
-                        // 🔒 CANDADO META: Solo aceptamos JPEG de menos de 64KB
-                        if (bufferTemp[0] === 0xFF && bufferTemp[1] === 0xD8 && bufferTemp.length < 60000) {
-                            thumbnailBuffer = bufferTemp;
-                        }
+                    console.log(`[Backend] Descargando y comprimiendo imagen de metadatos: ${linkData.imageUrl}`);
+                    
+                    // Jimp lee la imagen sin importar si es PNG, muy grande o pesada
+                    const image = await Jimp.read(linkData.imageUrl);
+                    
+                    // 🚀 COMPRESIÓN TIPO WHATSAPP NATIVO:
+                    // 1. Fondo blanco por si era un PNG transparente
+                    // 2. Recortamos a un cuadrado perfecto de 300x300 (ideal para la tarjeta)
+                    // 3. Bajamos la calidad al 65% para asegurar un peso ínfimo
+                    image.background(0xFFFFFFFF)
+                         .cover(300, 300)
+                         .quality(65);
+
+                    // Extraemos el binario forzando estrictamente el formato JPEG
+                    const bufferProcesado = await image.getBufferAsync(Jimp.MIME_JPEG);
+                    
+                    // 🔒 CANDADO META: Verificamos el peso final
+                    if (bufferProcesado.length < 64000) {
+                        thumbnailBuffer = bufferProcesado;
+                        console.log(`[Backend] Imagen procesada con éxito. Peso final: ${(bufferProcesado.length / 1024).toFixed(2)} KB.`);
+                    } else {
+                        // Respaldo agresivo si la imagen era increíblemente densa
+                        image.quality(40);
+                        thumbnailBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
                     }
                 } catch (e) {
-                    console.warn("[Backend] Fallo al descargar imagen para metadatos.");
+                    console.warn("[Backend] Fallo al procesar la imagen con Jimp. Usando píxel de supervivencia.", e.message);
                 }
             }
 
-            // Búfer de supervivencia (Micropíxel JPEG 100% legal)
+            // Búfer de supervivencia (Micropíxel JPEG)
             if (!thumbnailBuffer) {
                 thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
             }
