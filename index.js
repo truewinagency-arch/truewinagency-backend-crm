@@ -438,6 +438,13 @@ async function connectToWhatsApp() {
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
+
+        if (!msg.key.fromMe && msg.message && msg.message.extendedTextMessage) {
+            console.log("\n=======================================================");
+            console.log("🚨 RAW 'EXTENDED TEXT MESSAGE' CAPTURADO DE WHATSAPP:");
+            console.log(JSON.stringify(msg.message.extendedTextMessage, null, 2));
+            console.log("=======================================================\n");
+        }
         
         // 🚀 ESCUDO ANTI-ECO: Si el mensaje lo envió este mismo servidor, lo ignoramos.
         // Ya fue guardado y dibujado por la función que lo disparó originalmente.
