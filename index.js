@@ -659,33 +659,24 @@ app.post('/send-text', async (req, res) => {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        // 1. Si tu frontend llegara a enviar linkData explícito (por si lo actualizas a futuro)
         if (linkData && linkData.url) {
             await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData);
         } else {
-            // 2. 🚀 EL AUTO-RASTREADOR PARA ENVÍOS MANUALES
-            // Escaneamos el texto que escribiste en el CRM buscando enlaces
             const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
             const urls = mensajeFinal.match(urlRegex);
 
             if (urls && urls.length > 0) {
                 const linkDetectado = urls[0];
-                console.log(`[Envío Manual] Link detectado en el texto: ${linkDetectado}. Extrayendo info...`);
-                
-                // Usamos el scraper que construimos para extraer la portada oficial
                 const linkDataInfo = await extraerMetadatos(linkDetectado);
-                
-                // Despachamos a la fábrica de tarjetas
                 await enviarTarjetaEnlace(jidReal, mensajeFinal, linkDataInfo);
             } else {
-                // 3. Texto puro sin enlaces (se envía normal)
                 await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
             }
         }
 
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
-
-        // 🚀 EMISIÓN EN TIEMPO REAL: Sincroniza todas las pantallas abiertas del CRM
+        
+        // 🚀 EMISIÓN EN VIVO: Le avisa a tu CRM que dibuje la burbuja
         io.emit('nuevo-mensaje', { 
             numero: jidReal, 
             nombre: "TrueWin", 
