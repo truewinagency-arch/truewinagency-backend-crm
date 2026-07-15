@@ -710,38 +710,24 @@ app.post('/send-image', async (req, res) => {
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
         const jid = formatearJid(numero);
-        
-        // 🌟 PIEZA CORRECTORA: Procesamos las llaves del pie de foto en caliente
         const captionFinal = procesarSpintax(caption);
 
         await whatsappSock.sendPresenceUpdate('composing', jid);
         await delay(Math.floor(Math.random() * 1500) + 2000); 
-        
-        // Enviamos a Baileys el caption ya procesado y aleatorio
         await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: captionFinal });
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        // Guardamos en la base de datos con el texto real que vió el usuario
         await guardarMensajeBD(numero, "TrueWin", captionFinal || "[Imagen enviada]", 'out', null, urlImagen, 'image');
-
-        // 🚀 EMISIÓN EN TIEMPO REAL: Sincroniza la foto en todos los dispositivos
+        
+        // 🚀 EMISIÓN FALTANTE PARA DIBUJAR LA BURBUJA EN VIVO
         io.emit('nuevo-mensaje', { 
-            numero: jid, 
-            nombre: "TrueWin", 
-            texto: captionFinal || "[Imagen enviada]", 
-            hora: new Date().toISOString(),
-            timestamp: Date.now(),
-            remitente: null,
-            mediaUrl: urlImagen,
-            mediaType: 'image',
-            tipo: 'out'
+            numero: jid, nombre: "TrueWin", texto: captionFinal || "[Imagen enviada]", 
+            hora: new Date().toISOString(), timestamp: Date.now(),
+            remitente: null, mediaUrl: urlImagen, mediaType: 'image', tipo: 'out'
         });
 
         res.json({ success: true });
-    } catch (error) {
-        console.error(`[Error] Fallo enviando imagen a ${numero}:`, error);
-        res.status(500).json({ error: error.message });
-    }
+    } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 // =====================================================================
@@ -752,38 +738,24 @@ app.post('/send-video', async (req, res) => {
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
         const jid = formatearJid(numero);
-        
-        // 🌟 PIEZA CORRECTORA: Procesamos las llaves del pie de video en caliente
         const captionFinal = procesarSpintax(caption);
 
         await whatsappSock.sendPresenceUpdate('composing', jid);
         await delay(Math.floor(Math.random() * 2000) + 3000); 
-        
-        // Enviamos a Baileys el caption ya procesado y aleatorio
         await whatsappSock.sendMessage(jid, { video: { url: urlVideo }, caption: captionFinal });
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        // Guardamos en la base de datos con el texto real que vió el usuario
         await guardarMensajeBD(numero, "TrueWin", captionFinal || "[Video enviado]", 'out', null, urlVideo, 'video');
-
-        // 🚀 EMISIÓN EN TIEMPO REAL: Sincroniza el video en todos los dispositivos
+        
+        // 🚀 EMISIÓN FALTANTE PARA DIBUJAR LA BURBUJA EN VIVO
         io.emit('nuevo-mensaje', { 
-            numero: jid, 
-            nombre: "TrueWin", 
-            texto: captionFinal || "[Video enviado]", 
-            hora: new Date().toISOString(),
-            timestamp: Date.now(),
-            remitente: null,
-            mediaUrl: urlVideo,
-            mediaType: 'video',
-            tipo: 'out'
+            numero: jid, nombre: "TrueWin", texto: captionFinal || "[Video enviado]", 
+            hora: new Date().toISOString(), timestamp: Date.now(),
+            remitente: null, mediaUrl: urlVideo, mediaType: 'video', tipo: 'out'
         });
 
         res.json({ success: true });
-    } catch (error) {
-        console.error(`[Error] Fallo enviando video a ${numero}:`, error);
-        res.status(500).json({ error: error.message });
-    }
+    } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.post('/send-audio', async (req, res) => {
@@ -791,46 +763,28 @@ app.post('/send-audio', async (req, res) => {
     if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
     try {
         const jid = formatearJid(numero);
-        
-        // 🚀 CAMUFLAJE: Mostramos que estamos grabando
         await whatsappSock.sendPresenceUpdate('recording', jid);
         await delay(4000); 
         
-        // 🚀 DETECCIÓN INTELIGENTE DE FORMATO
-        // Revisamos si el enlace de Firebase contiene ".mp3"
         const esMP3 = urlAudio.toLowerCase().includes('.mp3');
-        
         await whatsappSock.sendMessage(jid, { 
-            audio: { url: urlAudio }, 
-            // Si es MP3 usamos el formato oficial de música, si no, el de nota de voz
-            mimetype: esMP3 ? 'audio/mpeg' : 'audio/ogg; codecs=opus', 
-            // Apagamos el micrófono verde (PTT) si es un MP3 para evitar que el teléfono receptor colapse
-            ptt: !esMP3 
+            audio: { url: urlAudio }, mimetype: esMP3 ? 'audio/mpeg' : 'audio/ogg; codecs=opus', ptt: !esMP3 
         });
-
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
         await guardarMensajeBD(numero, "TrueWin", "[Nota de voz enviada]", 'out', null, urlAudio, 'audio');
-
-        // 🚀 EMISIÓN EN TIEMPO REAL: Sincroniza la nota de voz en todos los dispositivos
+        
+        // 🚀 EMISIÓN FALTANTE PARA DIBUJAR LA BURBUJA EN VIVO
         io.emit('nuevo-mensaje', { 
-            numero: jid, 
-            nombre: "TrueWin", 
-            texto: "[Nota de voz enviada]", 
-            hora: new Date().toISOString(),
-            timestamp: Date.now(),
-            remitente: null,
-            mediaUrl: urlAudio,
-            mediaType: 'audio',
-            tipo: 'out'
+            numero: jid, nombre: "TrueWin", texto: "[Nota de voz enviada]", 
+            hora: new Date().toISOString(), timestamp: Date.now(),
+            remitente: null, mediaUrl: urlAudio, mediaType: 'audio', tipo: 'out'
         });
 
         res.json({ success: true });
-    } catch (error) {
-        console.error(`[Error] Fallo enviando audio a ${numero}:`, error);
-        res.status(500).json({ error: error.message });
-    }
+    } catch (error) { res.status(500).json({ error: error.message }); }
 });
+
 // 🚀 ENDPOINT CORREGIDO Y BLINDADO: Carga el historial en milisegundos sin congelarse
 app.get('/api/historial', async (req, res) => {
     try {
