@@ -1012,7 +1012,6 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
     let realWidth = 0;
     let realHeight = 0;
 
-    // Preparamos el texto del mensaje
     let textoVisible = mensajeFinal || "";
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
         textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
@@ -1020,56 +1019,64 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
 
     if (linkData && linkData.imageUrl) {
         try {
-            console.log(`[Tarjeta HD] Descargando portada oficial para: ${linkData.imageUrl}`);
+            console.log(`[Tarjeta HD] Renderizando portada oficial para: ${linkData.imageUrl}`);
             const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             
             if (resImagen.ok) {
                 const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                 const sharp = require('sharp');
                 
-                // 1. Procesamos la imagen en alta definición sin deformarla
-                // El método flatten cambia cualquier transparencia por un fondo blanco limpio
+                // 1. Extraemos las medidas reales de tu imagen
+                const metadata = await sharp(originalBuffer).metadata();
+                let originalWidth = metadata.width || 800;
+                let originalHeight = metadata.height || 418;
+
+                // 2. Escalamos la imagen para que tenga un ancho máximo de 800px (HD nativo)
+                if (originalWidth > 800) {
+                    originalHeight = Math.round((800 / originalWidth) * originalHeight);
+                    originalWidth = 800;
+                }
+                realWidth = originalWidth;
+                realHeight = originalHeight;
+
+                // 3. 🌟 EL ENGAÑO DEL CDN
+                // Subimos esto solo para obtener las llaves y obligar a WhatsApp a abrir el 
+                // contenedor gigante. Sabemos que fallará al desencriptar, ¡es parte del plan!
                 const hdBuffer = await sharp(originalBuffer)
-                    .resize({ width: 1024, height: 1024, fit: 'inside' })
+                    .resize({ width: realWidth, height: realHeight, fit: 'inside' })
                     .flatten({ background: { r: 255, g: 255, b: 255 } }) 
-                    .jpeg({ quality: 85 })
+                    .jpeg({ quality: 80 })
                     .toBuffer();
 
-                // 2. Medimos el tamaño exacto de la imagen procesada.
-                // Si enviamos dimensiones que no coinciden al píxel con el archivo, 
-                // WhatsApp entra en conflicto y muestra el cuadro transparente.
-                const hdMetadata = await sharp(hdBuffer).metadata();
-                realWidth = hdMetadata.width;
-                realHeight = hdMetadata.height;
-
-                // 3. Subimos la foto al servidor de WhatsApp para habilitar el diseño grande
                 const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
                 const mediaUpload = await prepareWAMessageMedia(
                     { image: hdBuffer },
                     { upload: whatsappSock.waUploadToServer }
                 );
                 hqImageMsg = mediaUpload.imageMessage;
-                console.log(`[Tarjeta HD] Imagen subida. Medidas reales: ${realWidth}x${realHeight}`);
 
-                // 4. Creamos una miniatura rápida para la carga inmediata (Máximo 45KB)
-                let calidad = 60;
+                // 4. 🌟 EL VERDADERO HÉROE: EL BASE64 EN ALTA DEFINICIÓN
+                // En lugar de una miniatura de 300px, inyectamos una imagen masiva de 800px.
+                // La comprimimos con Sharp para que pese menos de 55KB (límite vital de WhatsApp).
+                let calidad = 75;
                 thumbnailBuffer = await sharp(originalBuffer)
-                    .resize({ width: 300, height: 300, fit: 'inside' })
+                    .resize({ width: realWidth, height: realHeight, fit: 'inside' })
                     .flatten({ background: { r: 255, g: 255, b: 255 } })
                     .jpeg({ quality: calidad })
                     .toBuffer();
 
-                while (thumbnailBuffer.length > 45000 && calidad > 10) {
+                while (thumbnailBuffer.length > 55000 && calidad > 10) {
                     calidad -= 5;
                     thumbnailBuffer = await sharp(originalBuffer)
-                        .resize({ width: 300, height: 300, fit: 'inside' })
+                        .resize({ width: realWidth, height: realHeight, fit: 'inside' })
                         .flatten({ background: { r: 255, g: 255, b: 255 } })
                         .jpeg({ quality: calidad })
                         .toBuffer();
                 }
+                console.log(`[Tarjeta HD] Base64 HD Inyectado. Peso táctico: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
             }
         } catch (e) {
-            console.warn("[Tarjeta HD] Error procesando el archivo multimedia:", e.message);
+            console.warn("[Tarjeta HD] Fallo en el motor HD:", e.message);
         }
     }
 
@@ -1081,22 +1088,23 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
         canonicalUrl: linkData.url,
         title: linkData.title || "Enlace",
         description: linkData.description || "",
-        previewType: 0 // Indica el modo de vista previa estándar nativo
+        previewType: 0 
     };
 
     if (thumbnailBuffer) {
+        // Inyectamos nuestro salvavidas de 800px
         payloadExtended.jpegThumbnail = thumbnailBuffer;
     }
 
     if (hqImageMsg) {
-        // Enlazamos los tokens de descarga devueltos por el servidor de WhatsApp
+        // Inyectamos las llaves trampa para forzar la apertura del diseño gigante
         payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
         payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
         payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
         payloadExtended.mediaKey = hqImageMsg.mediaKey;
         payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
         
-        // Sincronizamos las dimensiones reales exactas del archivo
+        // Confirmamos las dimensiones de nuestra imagen de respaldo
         payloadExtended.thumbnailWidth = realWidth;
         payloadExtended.thumbnailHeight = realHeight;
     }
