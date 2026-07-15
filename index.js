@@ -1000,96 +1000,70 @@ app.delete('/api/plantillas/:id', async (req, res) => {
     }
 });
 
-// =========================================================================
-// 🚀 FÁBRICA DE TARJETAS ORGÁNICAS (Resolución Nativa + Entrega Blindada)
-// =========================================================================
-async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
-    let thumbnailBuffer = null;
-    let finalWidth = 0;
-    let finalHeight = 0;
+const sharp = require('sharp');
+// Si usas fetch nativo de Node.js (disponible en versiones modernas) o axios:
+const axios = require('axios'); 
 
-    // Estructuración del cuerpo del texto
-    let textoVisible = mensajeFinal || "";
-    if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
-        textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
-    }
+/**
+ * Envía un mensaje con una tarjeta de enlace optimizada en HD
+ * @param {Object} sock - Instancia del socket de Baileys
+ * @param {string} jid - ID del chat (ej. '123456789@s.whatsapp.net')
+ * @param {string} url - El enlace de destino de la tarjeta
+ * @param {string} titulo - Título de la tarjeta
+ * @param {string} descripcion - Descripción o subtítulo
+ * @param {Buffer|string} imageSource - Buffer de la imagen, ruta de archivo local, o URL web
+ */
+async function enviarTarjetaEnlaceOptimized(sock, jid, url, titulo, descripcion, imageSource) {
+    try {
+        let inputBuffer;
 
-    if (linkData && linkData.imageUrl) {
-        try {
-            console.log(`[Tarjeta Orgánica] Analizando imagen por defecto: ${linkData.imageUrl}`);
-            const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-            
-            if (resImagen.ok) {
-                const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
-                const sharp = require('sharp');
-                
-                // 1. 🌟 LECTURA DE METADATOS: Extraemos la resolución real por defecto de la imagen
-                const metadata = await sharp(originalBuffer).metadata();
-                let originalWidth = metadata.width || 800;
-                let originalHeight = metadata.height || 418;
-                
-                // 2. ESCALADO PROPORCIONAL INTELIGENTE (No deforma, no estira forzadamente)
-                // Si la imagen es gigante, la reducimos manteniendo su aspecto original exacto
-                if (originalWidth > 800) {
-                    originalHeight = Math.round((800 / originalWidth) * originalHeight);
-                    originalWidth = 800;
-                }
-                
-                finalWidth = originalWidth;
-                finalHeight = originalHeight;
-                let calidad = 80;
-
-                // Renderizamos respetando el tamaño y proporciones nativas de la web
-                thumbnailBuffer = await sharp(originalBuffer)
-                    .resize({ width: finalWidth, height: finalHeight, fit: 'inside' })
-                    .jpeg({ quality: calidad })
-                    .toBuffer();
-
-                // 3. 🛡️ FILTRO DE PESO STRICTO ANTI-BLOQUEO
-                // Mantener el búfer debajo de 40KB es lo que asegura que el servidor de Meta 
-                // no clasifique el paquete como corrupto y se lo entregue al receptor de inmediato.
-                while (thumbnailBuffer.length > 40000 && calidad > 10) {
-                    calidad -= 5;
-                    thumbnailBuffer = await sharp(originalBuffer)
-                        .resize({ width: finalWidth, height: finalHeight, fit: 'inside' })
-                        .jpeg({ quality: calidad })
-                        .toBuffer();
-                }
-                console.log(`[Tarjeta Orgánica] Procesada con éxito a ${finalWidth}x${finalHeight}. Peso seguro: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
-            }
-        } catch (e) {
-            console.warn("[Tarjeta Orgánica] Fallo al procesar proporciones nativas:", e.message);
+        // 1. Obtener el Buffer de la imagen de origen
+        if (Buffer.isBuffer(imageSource)) {
+            inputBuffer = imageSource;
+        } else if (typeof imageSource === 'string' && imageSource.startsWith('http')) {
+            // Si es una URL de internet, la descargamos como buffer
+            const response = await axios.get(imageSource, { responseType: 'arraybuffer' });
+            inputBuffer = Buffer.from(response.data);
+        } else if (typeof imageSource === 'string') {
+            // Si es una ruta local, Sharp la puede leer directamente
+            inputBuffer = imageSource; 
+        } else {
+            throw new Error("Formato de imagen no soportado. Debe ser Buffer, URL o ruta local.");
         }
+
+        // 2. Optimización extrema con Sharp (Aseguramos < 64KB)
+        const thumbnailBuffer = await sharp(inputBuffer)
+            .resize(300, 300, {
+                fit: 'cover',      // Recorta la imagen para llenar el cuadrado sin estirarse
+                position: 'center' // Centra el enfoque del recorte
+            })
+            .jpeg({ 
+                quality: 60,       // Calidad balanceada para peso pluma
+                mozjpeg: true      // Compresión optimizada avanzada
+            })
+            .toBuffer();
+
+        // 3. Envío con Baileys estructurando el externalAdReply
+        await sock.sendMessage(jid, {
+            text: `${titulo}\n\n👉 Accede aquí: ${url}`, // Mensaje de texto que acompaña la tarjeta
+            contextInfo: {
+                externalAdReply: {
+                    title: titulo,
+                    body: descripcion,
+                    mediaType: 1, // Tipo 1 = Foto/Imagen
+                    previewType: 'PHOTO',
+                    thumbnail: thumbnailBuffer, // Aquí inyectamos el buffer ultra optimizado
+                    sourceUrl: url,
+                    mediaUrl: url
+                }
+            }
+        });
+
+        console.log(`[WhatsApp] Tarjeta de enlace enviada correctamente a ${jid}`);
+
+    } catch (error) {
+        console.error("[WhatsApp Error] Error al procesar o enviar la tarjeta:", error.message);
     }
-
-    const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
-
-    // 4. ENSAMBLAJE PROTOBUF PURO (100% idéntico al comportamiento humano)
-    const payloadExtended = {
-        text: textoVisible, 
-        matchedText: linkData.url,
-        canonicalUrl: linkData.url,
-        title: linkData.title || "Enlace",
-        description: linkData.description || ""
-    };
-
-    if (thumbnailBuffer) {
-        // Inyectamos el Base64 limpio sin CDN intermediarios
-        payloadExtended.jpegThumbnail = thumbnailBuffer;
-        
-        // Informamos a la aplicación receptora las dimensiones reales de tu imagen
-        payloadExtended.thumbnailWidth = finalWidth;
-        payloadExtended.thumbnailHeight = finalHeight;
-    }
-
-    // Acoplamos el contenido usando el validador estándar de Baileys
-    const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-        extendedTextMessage: payloadExtended
-    }, { userJid: whatsappSock.user.id });
-
-    // Despachamos el paquete directamente al túnel de mensajes
-    await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
-    console.log(`[Tarjeta Orgánica] Mensaje transmitido de forma segura al JID: ${jidReal}`);
 }
 
 
