@@ -475,11 +475,28 @@ async function connectToWhatsApp() {
 
         const remoteJid = msg.key.remoteJid;
         const esGrupo = remoteJid.endsWith('@g.us');
-        let nombrePerfil = msg.pushName || "Usuario"; 
+        let nombrePerfil = msg.pushName || (esGrupo ? "Grupo de WhatsApp" : "Usuario"); 
         let remitenteEspecifico = null; 
-        registrarContactoInteligente(remoteJid, msg.pushName, esGrupo);
+
+        if (esGrupo) {
+            remitenteEspecifico = msg.pushName || msg.key.participant?.split('@')[0] || "Miembro";
+        }
+
+        // 🚀 CLAVE: Forzamos al servidor a esperar que el contacto/grupo se registre y asiente su nombre real
+        await registrarContactoInteligente(remoteJid, msg.pushName, esGrupo);
         
-        const identificador = remoteJid; 
+        // Buscamos si ya guardamos un nombre personalizado o real para este JID en Firestore
+        try {
+            const contactoDoc = await db.collection('crm_contactos').doc(remoteJid).get();
+            if (contactoDoc.exists) {
+                const cData = contactoDoc.data();
+                nombrePerfil = cData.nombrePersonalizado || cData.nombreOriginal || nombrePerfil;
+            }
+        } catch (e) {
+            console.warn("[Backend] No se pudo cruzar el nombre en caliente:", e.message);
+        }
+        
+        const identificador = remoteJid;
         
         // 🚀 Solo guardamos la llave para el "visto azul automático" si el mensaje es del cliente
         if (tipoMensaje === 'in') {
