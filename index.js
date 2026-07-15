@@ -439,16 +439,6 @@ async function connectToWhatsApp() {
     whatsappSock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         
-        // =========================================================================
-        // 🕵️‍♂️ RASTREADOR DE TARJETAS HD (MODO INGENIERÍA INVERSA)
-        // =========================================================================
-        if (!msg.key.fromMe && msg.message && msg.message.extendedTextMessage) {
-            console.log("\n=======================================================");
-            console.log("🚨 RAW 'EXTENDED TEXT MESSAGE' CAPTURADO DE WHATSAPP:");
-            console.log(JSON.stringify(msg.message.extendedTextMessage, null, 2));
-            console.log("=======================================================\n");
-        }
-        
         // 🚀 ESCUDO ANTI-ECO: Si el mensaje lo envió este mismo servidor, lo ignoramos.
         // Ya fue guardado y dibujado por la función que lo disparó originalmente.
         if (msg.key.fromMe && msg.key.id && idsEnviadosPorBot.has(msg.key.id)) {
@@ -659,141 +649,49 @@ app.put('/api/contactos/:jid', async (req, res) => {
 });
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (LÓGICA ORIGINAL RESTAURADA)
+// 🌐 ENDPOINT MANUAL: BANNER HD CRISTALINO (SIN CDN - RECTÁNGULO PURO)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
-    const { numero, mensaje, linkData } = req.body;
+    const { numero, mensaje, linkData } = req.body; 
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
-    
-    // 🚀 SALVAVIDAS ANTI-408
-    const respirar = () => new Promise(resolve => setTimeout(resolve, 50));
 
     try {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        if (linkData) {
-            let thumbnailBuffer = null;
-            let hqImageMsg = null;
-            let realWidth = 0;
-            let realHeight = 0;
-
-            if (linkData.imageUrl) {
-                try {
-                    console.log(`[Backend] Descargando imagen original: ${linkData.imageUrl}`);
-                    const resImagen = await fetch(linkData.imageUrl, {
-                        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-                    });
-                    
-                    if (resImagen.ok) {
-                        const arrayBuffer = await resImagen.arrayBuffer();
-                        await respirar(); 
-                        
-                        const sharp = require('sharp');
-                        
-                        // 1. REPLICAMOS TU LÓGICA: Leemos medidas originales
-                        const metadata = await sharp(Buffer.from(arrayBuffer)).metadata();
-                        let targetWidth = metadata.width;
-                        let targetHeight = metadata.height;
-                        
-                        // 2. REPLICAMOS TU LÓGICA: scaleToFit(800, 800)
-                        if (targetWidth > 800 || targetHeight > 800) {
-                            const ratio = Math.min(800 / targetWidth, 800 / targetHeight);
-                            targetWidth = Math.round(targetWidth * ratio);
-                            targetHeight = Math.round(targetHeight * ratio);
-                        }
-
-                        // 3. Procesamos la imagen base (Fondo blanco, escalada proporcional exacta)
-                        const baseImage = sharp(Buffer.from(arrayBuffer))
-                            .resize(targetWidth, targetHeight, { fit: 'inside' })
-                            .flatten({ background: { r: 255, g: 255, b: 255 } });
-                            
-                        const bufferHQ = await baseImage.clone().jpeg({ quality: 90 }).toBuffer();
-                        await respirar(); 
-
-                        // 4. REPLICAMOS TU LÓGICA: Extraemos medidas reales finales
-                        const finalMeta = await sharp(bufferHQ).metadata();
-                        realWidth = finalMeta.width;
-                        realHeight = finalMeta.height;
-
-                        // 5. SUBIMOS EL BÚFER HD AL CDN DE META
-                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
-                        const mediaUpload = await prepareWAMessageMedia(
-                            { image: bufferHQ },
-                            { upload: whatsappSock.waUploadToServer }
-                        );
-                        hqImageMsg = mediaUpload.imageMessage;
-                        console.log("[Backend] Imagen HQ subida al CDN de Meta exitosamente.");
-
-                        // 6. 🚀 SOLUCIÓN A LA PIXELACIÓN (Sin dañar tu código)
-                        // NO achicamos a 300px. Usamos la imagen grande y solo bajamos el "peso".
-                        let currentQuality = 70;
-                        let bufferProcesado = await baseImage.clone().jpeg({ quality: currentQuality }).toBuffer();
-                        
-                        while (bufferProcesado.length > 55000 && currentQuality > 10) {
-                            currentQuality -= 10;
-                            bufferProcesado = await baseImage.clone().jpeg({ quality: currentQuality }).toBuffer();
-                        }
-                        thumbnailBuffer = bufferProcesado;
-                        console.log(`[Backend] Base64 listo en HD. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
-                    }
-                } catch (e) {
-                    console.warn("[Backend] Fallo en el motor HD. Usando respaldo.", e.message);
-                }
-            }
-
-            if (!thumbnailBuffer) {
-                thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
-            }
-
-            // =================================================================
-            // 🚀 ENSAMBLAJE PROTOBUF NATIVO (Tu estructura original)
-            // =================================================================
-            const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
-
-            const payloadExtended = {
-                text: mensajeFinal,
-                matchedText: linkData.url,
-                canonicalUrl: linkData.url,
-                title: linkData.title,
-                description: linkData.description,
-                jpegThumbnail: thumbnailBuffer
-            };
-
-            // Inyectamos las llaves de la nube y las proporciones
-            if (hqImageMsg) {
-                payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
-                payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
-                payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
-                payloadExtended.mediaKey = hqImageMsg.mediaKey;
-                payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
-                
-                payloadExtended.thumbnailHeight = realHeight;
-                payloadExtended.thumbnailWidth = realWidth;
-            }
-
-            const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-                extendedTextMessage: payloadExtended
-            }, { userJid: whatsappSock.user.id });
-
-            await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
-
+        if (linkData && linkData.url) {
+            await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData);
         } else {
-            await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
+            const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
+            const urls = mensajeFinal.match(urlRegex);
+
+            if (urls && urls.length > 0) {
+                const linkDetectado = urls[0];
+                const linkDataInfo = await extraerMetadatos(linkDetectado);
+                await enviarTarjetaEnlace(jidReal, mensajeFinal, linkDataInfo);
+            } else {
+                await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
+            }
         }
 
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         
-        // Emisión en vivo para tu CRM
+        // 🚀 EMISIÓN EN VIVO: Le avisa a tu CRM que dibuje la burbuja
         io.emit('nuevo-mensaje', { 
-            numero: jidReal, nombre: "TrueWin", texto: mensajeFinal, 
-            hora: new Date().toISOString(), timestamp: Date.now(),
-            remitente: null, mediaUrl: null, mediaType: null, tipo: 'out'
+            numero: jidReal, 
+            nombre: "TrueWin", 
+            texto: mensajeFinal, 
+            hora: new Date().toISOString(),
+            timestamp: Date.now(),
+            remitente: null,
+            mediaUrl: null,
+            mediaType: null,
+            tipo: 'out'
         });
-        
+
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con Protobuf:", error);
+        console.error("Fallo al enviar texto manual con auto-tarjeta:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
@@ -1096,125 +994,9 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 });
 
 // =========================================================================
-// 🚀 FÁBRICA DE TARJETAS ORGÁNICAS (Resolución Nativa + Entrega Blindada)
+// 🚀 FÁBRICA DE TARJETAS HD (Renderizado Base64 Nativo - WhatsApp Web)
 // =========================================================================
-async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
-    let thumbnailBuffer = null;
-    let hqKeys = null;
-    let realWidth = 0;
-    let realHeight = 0;
-
-    let textoVisible = mensajeFinal || "";
-    if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
-        textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
-    }
-
-    if (linkData && linkData.imageUrl) {
-        try {
-            console.log(`[Tarjeta HD] Renderizando y encriptando: ${linkData.imageUrl}`);
-            const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-            
-            if (resImagen.ok) {
-                const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
-                const sharp = require('sharp');
-                
-                // 1. Renderizamos la imagen en Alta Definición sin deformar
-                const hdBuffer = await sharp(originalBuffer)
-                    .resize({ width: 800, height: 418, fit: 'inside' })
-                    .flatten({ background: { r: 255, g: 255, b: 255 } }) 
-                    .jpeg({ quality: 85 })
-                    .toBuffer();
-
-                const hdMetadata = await sharp(hdBuffer).metadata();
-                realWidth = hdMetadata.width;
-                realHeight = hdMetadata.height;
-
-                // 2. 🚀 EL SECRETO REVELADO: ENCRIPTACIÓN MANUAL CORRECTA
-                const crypto = require('crypto');
-                const { encryptedStream } = require('@whiskeysockets/baileys');
-
-                // Generamos una llave maestra virgen aleatoria
-                const mediaKey = crypto.randomBytes(32);
-
-                // Encriptamos la imagen ESPECÍFICAMENTE como "thumbnail-link" (Vista previa)
-                // Esto asegura que la cerradura coincida cuando WhatsApp Web intente abrirla.
-                const { stream, fileEncSha256, fileSha256 } = await encryptedStream(
-                    hdBuffer,
-                    'thumbnail-link' 
-                );
-
-                // Subimos el archivo encriptado al servidor CDN de WhatsApp
-                const uploadResult = await whatsappSock.waUploadToServer(stream, {
-                    mediaType: 'thumbnail-link',
-                    fileEncSha256: fileEncSha256
-                });
-
-                // Guardamos el llavero perfecto devuelto por Meta
-                hqKeys = {
-                    directPath: uploadResult.directPath,
-                    mediaKey: mediaKey,
-                    fileSha256: fileSha256,
-                    fileEncSha256: fileEncSha256,
-                    mediaKeyTimestamp: Math.floor(Date.now() / 1000)
-                };
-                console.log(`[Tarjeta HD] CDN completado con criptografía correcta.`);
-
-                // 3. Miniatura Base64 de respaldo ultraligera (Máximo 40KB)
-                let calidad = 60;
-                thumbnailBuffer = await sharp(originalBuffer)
-                    .resize({ width: 300, height: 300, fit: 'inside' })
-                    .flatten({ background: { r: 255, g: 255, b: 255 } })
-                    .jpeg({ quality: calidad })
-                    .toBuffer();
-
-                while (thumbnailBuffer.length > 40000 && calidad > 10) {
-                    calidad -= 5;
-                    thumbnailBuffer = await sharp(originalBuffer)
-                        .resize({ width: 300, height: 300, fit: 'inside' })
-                        .flatten({ background: { r: 255, g: 255, b: 255 } })
-                        .jpeg({ quality: calidad })
-                        .toBuffer();
-                }
-            }
-        } catch (e) {
-            console.warn("[Tarjeta HD] Fallo en la criptografía:", e.message);
-        }
-    }
-
-    const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
-
-    const payloadExtended = {
-        text: textoVisible, 
-        matchedText: linkData.url,
-        canonicalUrl: linkData.url,
-        title: linkData.title || "Enlace",
-        description: linkData.description || "",
-        previewType: 0
-    };
-
-    if (thumbnailBuffer) {
-        payloadExtended.jpegThumbnail = thumbnailBuffer;
-    }
-
-    if (hqKeys) {
-        // Inyectamos las llaves maestras compatibles
-        payloadExtended.thumbnailDirectPath = hqKeys.directPath;
-        payloadExtended.thumbnailSha256 = hqKeys.fileSha256;
-        payloadExtended.thumbnailEncSha256 = hqKeys.fileEncSha256;
-        payloadExtended.mediaKey = hqKeys.mediaKey;
-        payloadExtended.mediaKeyTimestamp = hqKeys.mediaKeyTimestamp;
-        
-        // Sincronizamos dimensiones para evitar la caja transparente
-        payloadExtended.thumbnailWidth = realWidth;
-        payloadExtended.thumbnailHeight = realHeight;
-    }
-
-    const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-        extendedTextMessage: payloadExtended
-    }, { userJid: whatsappSock.user.id });
-
-    await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
-}// =========================================================================
+// =========================================================================
 // 🚀 FÁBRICA DE TARJETAS HD GIGANTES (Versión Estable y Certificada)
 // =========================================================================
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
@@ -1311,6 +1093,7 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
 
     await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 }
+
 
 // 🚀 CEREBRO DEL CHATBOT EN LA NUBE: Evalúa palabras clave 24/7 de forma autónoma
 // 🚀 AJUSTE EN EN backend (index.js): Fuerza el visto automático en la nube antes de disparar
