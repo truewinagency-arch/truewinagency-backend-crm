@@ -64,6 +64,62 @@ async function guardarMensajeBD(numero, nombre, texto, tipo, remitente = null, m
     }
 }
 
+// 🚀 GESTOR DE CONTACTOS: Guarda, nombra y extrae metadatos de Grupos/Comunidades
+async function registrarContactoInteligente(jid, pushName, esGrupo) {
+    if (!whatsappSock || jid.includes('status@broadcast')) return;
+
+    try {
+        const docRef = db.collection('crm_contactos').doc(jid);
+        const doc = await docRef.get();
+
+        // Si ya existe en la base de datos, solo actualizamos su última actividad
+        if (doc.exists) {
+            await docRef.update({ ultimaActividad: Date.now() });
+            return;
+        }
+
+        // Si es un contacto nuevo, extraemos toda su identidad
+        let nombreOficial = pushName || "Usuario Desconocido";
+        let fotoUrl = null;
+        let tipoEntidad = esGrupo ? 'grupo' : 'persona';
+
+        if (esGrupo) {
+            try {
+                // 🌟 MAGIA: Extraemos el nombre real del grupo y su descripción
+                const metadata = await whatsappSock.groupMetadata(jid);
+                nombreOficial = metadata.subject || nombreOficial;
+                
+                // Detectamos si es un canal de avisos de comunidad (Announce)
+                if (metadata.announce) {
+                    tipoEntidad = 'comunidad_avisos';
+                }
+            } catch (e) {
+                console.warn(`[Contactos] No se pudo obtener metadata del grupo ${jid}`);
+            }
+        }
+
+        // Intentamos sacar la foto de perfil en segundo plano
+        try {
+            fotoUrl = await whatsappSock.profilePictureUrl(jid, 'image');
+        } catch (e) { /* Si no tiene foto, se queda en null */ }
+
+        // Guardamos el perfil maestro en Firestore
+        await docRef.set({
+            jid: jid,
+            nombreOriginal: nombreOficial,
+            nombrePersonalizado: "", // 🌟 Campo vacío listo para que lo edites en tu panel
+            tipo: tipoEntidad,
+            fotoPerfil: fotoUrl,
+            creadoEl: new Date().toISOString(),
+            ultimaActividad: Date.now()
+        });
+
+        console.log(`[Contactos] Nuevo perfil registrado: ${nombreOficial} (${tipoEntidad})`);
+    } catch (error) {
+        console.error("[Contactos] Error al registrar entidad:", error);
+    }
+}
+
 // 🚀 ENRUTADOR INTELIGENTE: Detecta si es un Grupo, un @lid o Persona normal sin romper formatos
 function formatearJid(numero) {
     const numStr = numero.toString();
@@ -421,11 +477,7 @@ async function connectToWhatsApp() {
         const esGrupo = remoteJid.endsWith('@g.us');
         let nombrePerfil = msg.pushName || "Usuario"; 
         let remitenteEspecifico = null; 
-
-        if (esGrupo) {
-            remitenteEspecifico = msg.pushName || msg.key.participant?.split('@')[0] || "Miembro";
-            nombrePerfil = "Grupo de WhatsApp";
-        }
+        registrarContactoInteligente(remoteJid, msg.pushName, esGrupo);
         
         const identificador = remoteJid; 
         
@@ -546,6 +598,38 @@ app.get('/status', (req, res) => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+
+// =========================================================================
+// 🚀 ENDPOINTS DE GESTIÓN DE CONTACTOS Y COMUNIDADES
+// =========================================================================
+
+// Obtener toda la lista de contactos para la barra lateral de tu chat
+app.get('/api/contactos', async (req, res) => {
+    try {
+        const snapshot = await db.collection('crm_contactos').orderBy('ultimaActividad', 'desc').get();
+        let contactos = [];
+        snapshot.forEach(doc => contactos.push(doc.data()));
+        res.json(contactos);
+    } catch (error) {
+        res.status(500).json({ error: "Fallo al obtener contactos" });
+    }
+});
+
+// Cambiar el nombre a un cliente o comunidad de forma personalizada
+app.put('/api/contactos/:jid', async (req, res) => {
+    try {
+        const { jid } = req.params;
+        const { nombrePersonalizado } = req.body;
+        
+        await db.collection('crm_contactos').doc(jid).update({
+            nombrePersonalizado: nombrePersonalizado
+        });
+        
+        res.json({ success: true, message: "Nombre actualizado con éxito" });
+    } catch (error) {
+        res.status(500).json({ error: "Fallo al actualizar el nombre" });
+    }
+});
 
 // =====================================================================
 // 🌐 ENDPOINT MANUAL: BANNER HD CRISTALINO (SIN CDN - RECTÁNGULO PURO)
@@ -682,7 +766,6 @@ app.get('/api/historial', async (req, res) => {
             return res.json({ historial: {}, nombres: {} }); 
         }
 
-        // Buscamos tus mensajes en la base de datos crm_mensajes
         const snapshot = await db.collection('crm_mensajes').where('host', '==', hostActivo).get();
         let todosLosMensajes = [];
         snapshot.forEach(doc => todosLosMensajes.push(doc.data()));
@@ -694,19 +777,49 @@ app.get('/api/historial', async (req, res) => {
         
         todosLosMensajes.forEach(data => {
             if (!historial[data.numero]) historial[data.numero] = [];
-            historial[data.numero].push({ 
-                tipo: data.tipo, 
-                texto: data.texto, 
-                hora: data.hora,
-                remitente: data.remitente || null,
-                mediaUrl: data.mediaUrl || null,
-                mediaType: data.mediaType || null
-            });
+            
+            let chatArray = historial[data.numero];
+            let ultimoMensaje = chatArray.length > 0 ? chatArray[chatArray.length - 1] : null;
+
+            // 🌟 LÓGICA DE COLLAGE:
+            // Si el último mensaje es del mismo tipo (in/out), es una imagen,
+            // el mensaje actual también es imagen, y se enviaron con menos de 60 segundos de diferencia...
+            if (
+                ultimoMensaje && 
+                ultimoMensaje.tipo === data.tipo &&
+                ultimoMensaje.mediaType === 'image' && 
+                data.mediaType === 'image' &&
+                (data.timestamp - ultimoMensaje.timestamp) < 60000 // 60 segundos
+            ) {
+                // Transformamos el mensaje anterior en un Collage (Array de URLs)
+                if (!ultimoMensaje.esCollage) {
+                    ultimoMensaje.esCollage = true;
+                    ultimoMensaje.mediaUrls = [ultimoMensaje.mediaUrl];
+                }
+                // Añadimos la nueva imagen al paquete
+                ultimoMensaje.mediaUrls.push(data.mediaUrl);
+                
+                // Concatenamos el texto si hay varios pies de foto (opcional)
+                if (data.texto && data.texto !== "[Archivo o mensaje interactivo]") {
+                    ultimoMensaje.texto = ultimoMensaje.texto + "\n" + data.texto;
+                }
+            } else {
+                // Es un mensaje normal, lo añadimos directamente
+                chatArray.push({ 
+                    tipo: data.tipo, 
+                    texto: data.texto, 
+                    hora: data.hora,
+                    timestamp: data.timestamp,
+                    remitente: data.remitente || null,
+                    mediaUrl: data.mediaUrl || null,
+                    mediaType: data.mediaType || null,
+                    esCollage: false
+                });
+            }
 
             if (data.tipo === 'in' && data.nombre) nombres[data.numero] = data.nombre;
         });
         
-        // 🚀 RESPUESTA INMEDIATA: Entregamos el cerebro visual sin retrasos de red
         res.json({ historial, nombres });
     } catch (error) {
         console.error("Error obteniendo historial:", error);
