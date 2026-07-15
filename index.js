@@ -1006,44 +1006,52 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
 
     if (linkData && linkData.imageUrl) {
         try {
-            console.log(`[Tarjeta] Procesando miniatura para: ${linkData.imageUrl}`);
+            console.log(`[Tarjeta HD] Procesando portada inmersiva para: ${linkData.imageUrl}`);
             const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             
             if (resImagen.ok) {
                 const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
-                let calidad = 75;
+                let calidad = 85; // Calidad inicial alta
                 
+                // 🌟 SECRETO HD: Obligamos a la imagen a tener un formato rectangular 1.91:1 (Banner de Cine)
+                // y aumentamos el ancho a 720px. Esto dispara el 'high-quality-layout' en Meta.
                 thumbnailBuffer = await sharp(originalBuffer)
-                    .resize({ width: 300, withoutEnlargement: true })
+                    .resize({ width: 720, height: 377, fit: 'cover', withoutEnlargement: true })
                     .jpeg({ quality: calidad })
                     .toBuffer();
 
-                while (thumbnailBuffer.length > 14000 && calidad > 10) {
-                    calidad -= 10;
+                // 🌟 NUEVO LÍMITE DE PESO: WhatsApp soporta hasta ~64KB en el Base64.
+                // Reducimos la compresión para permitir tarjetas nítidas de hasta 50KB.
+                while (thumbnailBuffer.length > 50000 && calidad > 10) {
+                    calidad -= 8;
                     thumbnailBuffer = await sharp(originalBuffer)
-                        .resize({ width: 300, withoutEnlargement: true })
+                        .resize({ width: 720, height: 377, fit: 'cover', withoutEnlargement: true })
                         .jpeg({ quality: calidad })
                         .toBuffer();
                 }
-                console.log(`[Tarjeta] Miniatura validada. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                console.log(`[Tarjeta HD] Renderizado exitoso. Peso final: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
             }
         } catch (e) {
-            console.warn("[Tarjeta] Fallo al generar miniatura:", e.message);
+            console.warn("[Tarjeta HD] Fallo al generar miniatura:", e.message);
         }
     }
 
     const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
-    // Ensamblamos los datos obligatorios
     const payloadExtended = {
         text: textoVisible, 
         matchedText: linkData.url,
         canonicalUrl: linkData.url,
         title: linkData.title || "Enlace",
-        description: linkData.description || ""
+        description: linkData.description || "",
+        
+        // 🚀 LA PIEZA DORADA: Le dice a WhatsApp el tamaño exacto antes de que renderice
+        // Esto obliga a la plataforma a activar el 'high-quality-layout' vertical
+        thumbnailWidthPixels: 720,
+        thumbnailHeightPixels: 377
     };
 
-    // Solo inyectamos la imagen si se generó bien (evita que WhatsApp borre la tarjeta)
+    // Solo inyectamos la imagen si se generó bien
     if (thumbnailBuffer) {
         payloadExtended.jpegThumbnail = thumbnailBuffer;
     }
