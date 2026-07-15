@@ -1015,15 +1015,13 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
                 
                 const sharp = require('sharp');
                 
-                // 🌟 EL SECRETO REVELADO POR TU HTML: 
-                // Forzamos la proporción a 1.91:1 (Banner) en una resolución media-alta.
+                // Formato Banner 1.91:1
                 thumbnailBuffer = await sharp(originalBuffer)
                     .resize({ width: 600, height: 314, fit: 'cover' })
                     .jpeg({ quality: calidad })
                     .toBuffer();
 
-                // 🌟 PROTECCIÓN DE PAYLOAD (El límite de Meta es ~45KB)
-                // Si nos pasamos de peso, WhatsApp descarta la imagen o achica la tarjeta.
+                // Mantener estrictamente debajo de los 45KB permitidos para Base64
                 while (thumbnailBuffer.length > 45000 && calidad > 10) {
                     calidad -= 5;
                     thumbnailBuffer = await sharp(originalBuffer)
@@ -1048,10 +1046,15 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
         description: linkData.description || ""
     };
 
-    // 🚀 Pasamos SOLO el buffer puro. WhatsApp decodificará el JPEG, 
-    // verá que es rectangular (600x314) y activará el 'high-quality-layout'.
     if (thumbnailBuffer) {
+        // 1. Inyectamos la imagen directa (como nos chivó tu HTML)
         payloadExtended.jpegThumbnail = thumbnailBuffer;
+        
+        // 2. 🚀 EL FIX DEFINITIVO: 
+        // Usamos los nombres exactos del Protobuf de Meta ('thumbnailWidth' y 'thumbnailHeight').
+        // Esto obliga al cliente de WhatsApp a estirar el Base64 en el 'high-quality-layout'.
+        payloadExtended.thumbnailWidth = 600;
+        payloadExtended.thumbnailHeight = 314;
     }
 
     const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
