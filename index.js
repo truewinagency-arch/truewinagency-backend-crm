@@ -661,47 +661,137 @@ app.put('/api/contactos/:jid', async (req, res) => {
 // =====================================================================
 // 🌐 ENDPOINT MANUAL: BANNER HD CRISTALINO (SIN CDN - RECTÁNGULO PURO)
 // =====================================================================
+// =====================================================================
+// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (JIMP ORIGINAL RESTAURADO)
+// =====================================================================
 app.post('/send-text', async (req, res) => {
-    const { numero, mensaje, linkData } = req.body; 
+    const { numero, mensaje, linkData } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
+    
+    // 🚀 SALVAVIDAS ANTI-408: Le da tiempo al servidor de responderle a WhatsApp
+    const respirar = () => new Promise(resolve => setTimeout(resolve, 50));
 
     try {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
-        if (linkData && linkData.url) {
-            await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData);
-        } else {
-            const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
-            const urls = mensajeFinal.match(urlRegex);
+        if (linkData) {
+            let thumbnailBuffer = null;
+            let hqImageMsg = null;
+            let realWidth = 0;
+            let realHeight = 0;
 
-            if (urls && urls.length > 0) {
-                const linkDetectado = urls[0];
-                const linkDataInfo = await extraerMetadatos(linkDetectado);
-                await enviarTarjetaEnlace(jidReal, mensajeFinal, linkDataInfo);
-            } else {
-                await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
+            if (linkData.imageUrl) {
+                try {
+                    console.log(`[Backend] Descargando imagen original: ${linkData.imageUrl}`);
+                    const resImagen = await fetch(linkData.imageUrl, {
+                        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+                    });
+                    
+                    if (resImagen.ok) {
+                        const arrayBuffer = await resImagen.arrayBuffer();
+                        await respirar(); 
+                        
+                        const Jimp = require('jimp');
+                        const image = await Jimp.read(Buffer.from(arrayBuffer));
+                        await respirar(); 
+
+                        image.background(0xFFFFFFFF);
+                        
+                        // Prevención de congelamiento (Mantenemos tu lógica intacta)
+                        if (image.bitmap.width > 800 || image.bitmap.height > 800) {
+                            image.scaleToFit(800, 800);
+                        }
+                        
+                        realWidth = image.bitmap.width;
+                        realHeight = image.bitmap.height;
+                        await respirar(); 
+
+                        // 1. SUBIMOS EL BÚFER HD AL CDN DE META
+                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
+                        await respirar();
+
+                        const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+                        const mediaUpload = await prepareWAMessageMedia(
+                            { image: bufferHQ },
+                            { upload: whatsappSock.waUploadToServer }
+                        );
+                        hqImageMsg = mediaUpload.imageMessage;
+                        console.log("[Backend] Imagen HQ subida al CDN de Meta exitosamente.");
+
+                        // 2. 🚀 SOLUCIÓN A LA PIXELACIÓN (Sin dañar tu código)
+                        // Ya no encogemos la imagen a 300px. La dejamos en 800px (HD).
+                        // Solo bajamos el "peso" del archivo (quality) para que pase el filtro de WhatsApp.
+                        const thumbImage = image.clone();
+                        let currentQuality = 70;
+                        thumbImage.quality(currentQuality);
+                        let bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
+                        
+                        while (bufferProcesado.length > 55000 && currentQuality > 10) {
+                            currentQuality -= 10;
+                            thumbImage.quality(currentQuality);
+                            bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
+                        }
+                        thumbnailBuffer = bufferProcesado;
+                        console.log(`[Backend] Base64 listo en HD. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                    }
+                } catch (e) {
+                    console.warn("[Backend] Fallo en el motor HD. Usando respaldo.", e.message);
+                }
             }
+
+            if (!thumbnailBuffer) {
+                thumbnailBuffer = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
+            }
+
+            // =================================================================
+            // 🚀 3. ENSAMBLAJE PROTOBUF NATIVO (Tu estructura original)
+            // =================================================================
+            const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
+
+            const payloadExtended = {
+                text: mensajeFinal,
+                matchedText: linkData.url,
+                canonicalUrl: linkData.url,
+                title: linkData.title,
+                description: linkData.description,
+                jpegThumbnail: thumbnailBuffer
+            };
+
+            // Inyectamos las llaves de la nube y las proporciones
+            if (hqImageMsg) {
+                payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
+                payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
+                payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
+                payloadExtended.mediaKey = hqImageMsg.mediaKey;
+                payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+                
+                payloadExtended.thumbnailHeight = realHeight;
+                payloadExtended.thumbnailWidth = realWidth;
+            }
+
+            const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
+                extendedTextMessage: payloadExtended
+            }, { userJid: whatsappSock.user.id });
+
+            await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
+
+        } else {
+            await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
         }
 
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
         
-        // 🚀 EMISIÓN EN VIVO: Le avisa a tu CRM que dibuje la burbuja
+        // Emisión en vivo para tu CRM
         io.emit('nuevo-mensaje', { 
-            numero: jidReal, 
-            nombre: "TrueWin", 
-            texto: mensajeFinal, 
-            hora: new Date().toISOString(),
-            timestamp: Date.now(),
-            remitente: null,
-            mediaUrl: null,
-            mediaType: null,
-            tipo: 'out'
+            numero: jidReal, nombre: "TrueWin", texto: mensajeFinal, 
+            hora: new Date().toISOString(), timestamp: Date.now(),
+            remitente: null, mediaUrl: null, mediaType: null, tipo: 'out'
         });
-
+        
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con auto-tarjeta:", error);
+        console.error("Fallo al enviar texto manual con Protobuf:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
