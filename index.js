@@ -1008,7 +1008,7 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 // =========================================================================
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
     let thumbnailBuffer = null;
-    let hqImageMsg = null;
+    let hqKeys = null;
     let realWidth = 0;
     let realHeight = 0;
 
@@ -1019,64 +1019,73 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
 
     if (linkData && linkData.imageUrl) {
         try {
-            console.log(`[Tarjeta HD] Renderizando portada oficial para: ${linkData.imageUrl}`);
+            console.log(`[Tarjeta HD] Renderizando y encriptando: ${linkData.imageUrl}`);
             const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             
             if (resImagen.ok) {
                 const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                 const sharp = require('sharp');
                 
-                // 1. Extraemos las medidas reales de tu imagen
-                const metadata = await sharp(originalBuffer).metadata();
-                let originalWidth = metadata.width || 800;
-                let originalHeight = metadata.height || 418;
-
-                // 2. Escalamos la imagen para que tenga un ancho máximo de 800px (HD nativo)
-                if (originalWidth > 800) {
-                    originalHeight = Math.round((800 / originalWidth) * originalHeight);
-                    originalWidth = 800;
-                }
-                realWidth = originalWidth;
-                realHeight = originalHeight;
-
-                // 3. 🌟 EL ENGAÑO DEL CDN
-                // Subimos esto solo para obtener las llaves y obligar a WhatsApp a abrir el 
-                // contenedor gigante. Sabemos que fallará al desencriptar, ¡es parte del plan!
+                // 1. Renderizamos la imagen en Alta Definición sin deformar
                 const hdBuffer = await sharp(originalBuffer)
-                    .resize({ width: realWidth, height: realHeight, fit: 'inside' })
+                    .resize({ width: 800, height: 418, fit: 'inside' })
                     .flatten({ background: { r: 255, g: 255, b: 255 } }) 
-                    .jpeg({ quality: 80 })
+                    .jpeg({ quality: 85 })
                     .toBuffer();
 
-                const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
-                const mediaUpload = await prepareWAMessageMedia(
-                    { image: hdBuffer },
-                    { upload: whatsappSock.waUploadToServer }
-                );
-                hqImageMsg = mediaUpload.imageMessage;
+                const hdMetadata = await sharp(hdBuffer).metadata();
+                realWidth = hdMetadata.width;
+                realHeight = hdMetadata.height;
 
-                // 4. 🌟 EL VERDADERO HÉROE: EL BASE64 EN ALTA DEFINICIÓN
-                // En lugar de una miniatura de 300px, inyectamos una imagen masiva de 800px.
-                // La comprimimos con Sharp para que pese menos de 55KB (límite vital de WhatsApp).
-                let calidad = 75;
+                // 2. 🚀 EL SECRETO REVELADO: ENCRIPTACIÓN MANUAL CORRECTA
+                const crypto = require('crypto');
+                const { encryptedStream } = require('@whiskeysockets/baileys');
+
+                // Generamos una llave maestra virgen aleatoria
+                const mediaKey = crypto.randomBytes(32);
+
+                // Encriptamos la imagen ESPECÍFICAMENTE como "thumbnail-link" (Vista previa)
+                // Esto asegura que la cerradura coincida cuando WhatsApp Web intente abrirla.
+                const { stream, fileEncSha256, fileSha256 } = await encryptedStream(
+                    hdBuffer,
+                    'thumbnail-link' 
+                );
+
+                // Subimos el archivo encriptado al servidor CDN de WhatsApp
+                const uploadResult = await whatsappSock.waUploadToServer(stream, {
+                    mediaType: 'thumbnail-link',
+                    fileEncSha256: fileEncSha256
+                });
+
+                // Guardamos el llavero perfecto devuelto por Meta
+                hqKeys = {
+                    directPath: uploadResult.directPath,
+                    mediaKey: mediaKey,
+                    fileSha256: fileSha256,
+                    fileEncSha256: fileEncSha256,
+                    mediaKeyTimestamp: Math.floor(Date.now() / 1000)
+                };
+                console.log(`[Tarjeta HD] CDN completado con criptografía correcta.`);
+
+                // 3. Miniatura Base64 de respaldo ultraligera (Máximo 40KB)
+                let calidad = 60;
                 thumbnailBuffer = await sharp(originalBuffer)
-                    .resize({ width: realWidth, height: realHeight, fit: 'inside' })
+                    .resize({ width: 300, height: 300, fit: 'inside' })
                     .flatten({ background: { r: 255, g: 255, b: 255 } })
                     .jpeg({ quality: calidad })
                     .toBuffer();
 
-                while (thumbnailBuffer.length > 55000 && calidad > 10) {
+                while (thumbnailBuffer.length > 40000 && calidad > 10) {
                     calidad -= 5;
                     thumbnailBuffer = await sharp(originalBuffer)
-                        .resize({ width: realWidth, height: realHeight, fit: 'inside' })
+                        .resize({ width: 300, height: 300, fit: 'inside' })
                         .flatten({ background: { r: 255, g: 255, b: 255 } })
                         .jpeg({ quality: calidad })
                         .toBuffer();
                 }
-                console.log(`[Tarjeta HD] Base64 HD Inyectado. Peso táctico: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
             }
         } catch (e) {
-            console.warn("[Tarjeta HD] Fallo en el motor HD:", e.message);
+            console.warn("[Tarjeta HD] Fallo en la criptografía:", e.message);
         }
     }
 
@@ -1088,23 +1097,22 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
         canonicalUrl: linkData.url,
         title: linkData.title || "Enlace",
         description: linkData.description || "",
-        previewType: 0 
+        previewType: 0
     };
 
     if (thumbnailBuffer) {
-        // Inyectamos nuestro salvavidas de 800px
         payloadExtended.jpegThumbnail = thumbnailBuffer;
     }
 
-    if (hqImageMsg) {
-        // Inyectamos las llaves trampa para forzar la apertura del diseño gigante
-        payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
-        payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
-        payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
-        payloadExtended.mediaKey = hqImageMsg.mediaKey;
-        payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+    if (hqKeys) {
+        // Inyectamos las llaves maestras compatibles
+        payloadExtended.thumbnailDirectPath = hqKeys.directPath;
+        payloadExtended.thumbnailSha256 = hqKeys.fileSha256;
+        payloadExtended.thumbnailEncSha256 = hqKeys.fileEncSha256;
+        payloadExtended.mediaKey = hqKeys.mediaKey;
+        payloadExtended.mediaKeyTimestamp = hqKeys.mediaKeyTimestamp;
         
-        // Confirmamos las dimensiones de nuestra imagen de respaldo
+        // Sincronizamos dimensiones para evitar la caja transparente
         payloadExtended.thumbnailWidth = realWidth;
         payloadExtended.thumbnailHeight = realHeight;
     }
