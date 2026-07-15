@@ -1220,16 +1220,17 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             await guardarMensajeBD(numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
 
             // Emitimos por WebSockets al CRM
-            io.emit('nuevo-mensaje', {
-                numero: numeroDestino,
-                nombre: "TrueWin",
-                texto: textoBurbuja,
-                hora: new Date().toISOString(),
-                remitente: null,
-                mediaUrl: mUrl,
-                mediaType: mType,
-                tipo: 'out'
-            });
+            io.emit('nuevo-mensaje', { 
+            numero: identificador, 
+            nombre: nombrePerfil, 
+            texto: texto, 
+            hora: new Date().toISOString(),
+            timestamp: Date.now(), // 🚀 NUEVO: Vital para que la lógica de collage en vivo no falle
+            remitente: remitenteEspecifico,
+            mediaUrl: mediaUrl,
+            mediaType: mediaType,
+            tipo: tipoMensaje 
+        });
 
             const delayHumano = Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500;
             await pause(delayHumano);
