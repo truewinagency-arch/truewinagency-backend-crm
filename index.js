@@ -1006,9 +1006,13 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 // =========================================================================
 // 🚀 FÁBRICA DE TARJETAS HD (Renderizado Base64 Nativo - WhatsApp Web)
 // =========================================================================
+// =========================================================================
+// 🚀 FÁBRICA DE TARJETAS HD (Bot Developer Hack: External Ad Reply)
+// =========================================================================
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
     let thumbnailBuffer = null;
 
+    // Formateo del texto principal
     let textoVisible = mensajeFinal || "";
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
         textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
@@ -1016,62 +1020,57 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
 
     if (linkData && linkData.imageUrl) {
         try {
-            console.log(`[Tarjeta HD] Renderizando banner Base64 para: ${linkData.imageUrl}`);
+            console.log(`[Tarjeta HD] Renderizando banner inmersivo para: ${linkData.imageUrl}`);
             const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             
             if (resImagen.ok) {
                 const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                 let calidad = 85; 
-                
                 const sharp = require('sharp');
                 
-                // Formato Banner 1.91:1
+                // 🌟 PROPORCIONES EXACTAS DEL JSON INTERCEPTADO (1024 x 328)
                 thumbnailBuffer = await sharp(originalBuffer)
-                    .resize({ width: 600, height: 314, fit: 'cover' })
+                    .resize({ width: 1024, height: 328, fit: 'cover' })
                     .jpeg({ quality: calidad })
                     .toBuffer();
 
-                // Mantener estrictamente debajo de los 45KB permitidos para Base64
+                // Límite de seguridad estricto de Meta para Base64 (~45KB)
                 while (thumbnailBuffer.length > 45000 && calidad > 10) {
                     calidad -= 5;
                     thumbnailBuffer = await sharp(originalBuffer)
-                        .resize({ width: 600, height: 314, fit: 'cover' })
+                        .resize({ width: 1024, height: 328, fit: 'cover' })
                         .jpeg({ quality: calidad })
                         .toBuffer();
                 }
-                console.log(`[Tarjeta HD] Base64 listo. Peso seguro: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                console.log(`[Tarjeta HD] Buffer listo. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
             }
         } catch (e) {
-            console.warn("[Tarjeta HD] Fallo al generar miniatura Base64:", e.message);
+            console.warn("[Tarjeta HD] Fallo al generar miniatura:", e.message);
         }
     }
 
-    const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
-
-    const payloadExtended = {
-        text: textoVisible, 
-        matchedText: linkData.url,
-        canonicalUrl: linkData.url,
-        title: linkData.title || "Enlace",
-        description: linkData.description || ""
-    };
-
-    if (thumbnailBuffer) {
-        // 1. Inyectamos la imagen directa (como nos chivó tu HTML)
-        payloadExtended.jpegThumbnail = thumbnailBuffer;
-        
-        // 2. 🚀 EL FIX DEFINITIVO: 
-        // Usamos los nombres exactos del Protobuf de Meta ('thumbnailWidth' y 'thumbnailHeight').
-        // Esto obliga al cliente de WhatsApp a estirar el Base64 en el 'high-quality-layout'.
-        payloadExtended.thumbnailWidth = 600;
-        payloadExtended.thumbnailHeight = 314;
+    // Si por alguna razón no hay imagen, mandamos el texto plano
+    if (!thumbnailBuffer) {
+        await whatsappSock.sendMessage(jidReal, { text: textoVisible });
+        return;
     }
 
-    const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-        extendedTextMessage: payloadExtended
-    }, { userJid: whatsappSock.user.id });
-
-    await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
+    // 🚀 LA LLAVE MAESTRA: Usamos la API de Anuncios Externos de Baileys.
+    // Al pasar 'renderLargerThumbnail: true', WhatsApp descarta la miniatura pequeña
+    // y estira tu Base64 al 'high-quality-layout' sin necesitar enlaces del CDN.
+    await whatsappSock.sendMessage(jidReal, {
+        text: textoVisible,
+        contextInfo: {
+            externalAdReply: {
+                title: linkData.title || "TrueWin Agency",
+                body: linkData.description || "Haz clic para acceder...",
+                mediaType: 1, // 1 = Imagen estática
+                thumbnail: thumbnailBuffer, // Pasamos el buffer puro
+                sourceUrl: linkData.url,
+                renderLargerThumbnail: true // 🔥 LA ORDEN SUPREMA PARA LA TARJETA GIGANTE
+            }
+        }
+    });
 }
 
 
