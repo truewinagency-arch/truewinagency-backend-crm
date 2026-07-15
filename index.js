@@ -1122,6 +1122,102 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
     }, { userJid: whatsappSock.user.id });
 
     await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
+}// =========================================================================
+// 🚀 FÁBRICA DE TARJETAS HD GIGANTES (Versión Estable y Certificada)
+// =========================================================================
+async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
+    let thumbnailBuffer = null;
+    let hqImageMsg = null;
+    
+    // 🌟 Proporciones exactas extraídas de tu captura de WhatsApp Web
+    const realWidth = 1024;
+    const realHeight = 328;
+
+    let textoVisible = mensajeFinal || "";
+    if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
+        textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
+    }
+
+    if (linkData && linkData.imageUrl) {
+        try {
+            console.log(`[Tarjeta HD] Descargando portada para optimización: ${linkData.imageUrl}`);
+            const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            
+            if (resImagen.ok) {
+                const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
+                const sharp = require('sharp');
+                
+                // 1. Forzamos el corte exacto estilo Banner de WhatsApp Web (1024x328)
+                // Usamos flatten para asegurar que no viajen canales alfa transparentes rotos
+                const hdBuffer = await sharp(originalBuffer)
+                    .resize({ width: realWidth, height: realHeight, fit: 'cover' })
+                    .flatten({ background: { r: 255, g: 255, b: 255 } }) 
+                    .jpeg({ quality: 80 })
+                    .toBuffer();
+
+                // 2. Subida oficial y segura al servidor usando el método nativo de Baileys
+                const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+                const mediaUpload = await prepareWAMessageMedia(
+                    { image: hdBuffer },
+                    { upload: whatsappSock.waUploadToServer }
+                );
+                hqImageMsg = mediaUpload.imageMessage;
+
+                // 3. Creamos una miniatura Base64 nítida que mantenga el mismo aspecto alargado
+                let calidad = 70;
+                thumbnailBuffer = await sharp(hdBuffer)
+                    .resize({ width: 512, height: 164, fit: 'cover' }) // Mitad de escala exacta
+                    .jpeg({ quality: calidad })
+                    .toBuffer();
+
+                // Ajuste de peso estricto por debajo de los 45KB de seguridad
+                while (thumbnailBuffer.length > 45000 && calidad > 10) {
+                    calidad -= 5;
+                    thumbnailBuffer = await sharp(hdBuffer)
+                        .resize({ width: 512, height: 164, fit: 'cover' })
+                        .jpeg({ quality: calidad })
+                        .toBuffer();
+                }
+                console.log(`[Tarjeta HD] Sincronización exitosa. Peso Base64: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB`);
+            }
+        } catch (e) {
+            console.warn("[Tarjeta HD] Fallo en el procesamiento del banner:", e.message);
+        }
+    }
+
+    const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
+
+    const payloadExtended = {
+        text: textoVisible, 
+        matchedText: linkData.url,
+        canonicalUrl: linkData.url,
+        title: linkData.title || "Enlace",
+        description: linkData.description || "",
+        previewType: 0 
+    };
+
+    if (thumbnailBuffer) {
+        payloadExtended.jpegThumbnail = thumbnailBuffer;
+    }
+
+    if (hqImageMsg) {
+        // Vinculamos las llaves del servidor generadas limpiamente por Baileys
+        payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
+        payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
+        payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
+        payloadExtended.mediaKey = hqImageMsg.mediaKey;
+        payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+        
+        // Asignamos las medidas perfectas del contenedor para obligar el estiramiento HD
+        payloadExtended.thumbnailWidth = realWidth;
+        payloadExtended.thumbnailHeight = realHeight;
+    }
+
+    const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
+        extendedTextMessage: payloadExtended
+    }, { userJid: whatsappSock.user.id });
+
+    await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 }
 
 // 🚀 CEREBRO DEL CHATBOT EN LA NUBE: Evalúa palabras clave 24/7 de forma autónoma
