@@ -867,11 +867,27 @@ app.post('/api/marcar-visto', async (req, res) => {
 app.get('/api/foto-perfil', async (req, res) => {
     const { jid } = req.query;
     if (!whatsappSock || !jid) return res.json({ url: null });
+    
     try {
+        // 🌟 PAUSA DE CAMUFLAJE: Esperamos 350ms aleatorios para que Meta 
+        // no detecte que las peticiones se hacen en ráfaga automática desde el CRM
+        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 200) + 200));
+
         const urlFoto = await whatsappSock.profilePictureUrl(jid, 'image');
-        res.json({ url: urlFoto });
+        
+        console.log(`[Foto Perfil 🟢] Éxito al resolver JID: ${jid}`);
+        return res.json({ url: urlFoto });
+
     } catch (e) {
-        res.json({ url: null }); // Si no tiene foto pública, responde null limpiamente sin tumbar el backend
+        // 🌟 AQUÍ VERÁS EL DIAGNÓSTICO EXACTO EN LA CONSOLA DE RENDER
+        console.error(`[Foto Perfil 🚨] Error exacto para JID ${jid}:`, {
+            mensaje: e.message,
+            codigo: e.statusCode || e.output?.statusCode || 'Sin código',
+            stack: e.stack ? e.stack.split('\n')[1].trim() : ''
+        });
+
+        // Devolvemos null limpiamente al frontend para que no colapse la interfaz
+        return res.json({ url: null }); 
     }
 });
 
