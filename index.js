@@ -994,14 +994,10 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 });
 
 // =========================================================================
-// 🚀 FÁBRICA DE TARJETAS HD (SIN BORDES BLANCOS)
-// =========================================================================
-// =========================================================================
-// 🚀 FÁBRICA DE TARJETAS HD DEFINITIVA (CDN META + SHARP)
+// 🚀 FÁBRICA DE TARJETAS HD (Renderizado Base64 Nativo - WhatsApp Web)
 // =========================================================================
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
     let thumbnailBuffer = null;
-    let hqImageMsg = null;
 
     let textoVisible = mensajeFinal || "";
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
@@ -1010,36 +1006,35 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
 
     if (linkData && linkData.imageUrl) {
         try {
-            console.log(`[Tarjeta HD] Descargando y procesando portada: ${linkData.imageUrl}`);
+            console.log(`[Tarjeta HD] Renderizando banner Base64 para: ${linkData.imageUrl}`);
             const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             
             if (resImagen.ok) {
                 const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
+                let calidad = 85; 
                 
-                // 1. 🌟 RENDERIZADO HD (800x418 - Formato Cine Exacto 1.91:1)
                 const sharp = require('sharp');
-                const hdBuffer = await sharp(originalBuffer)
-                    .resize({ width: 800, height: 418, fit: 'cover', withoutEnlargement: true })
-                    .jpeg({ quality: 85 })
-                    .toBuffer();
-
-                // 2. 🌟 SUBIDA AL CDN DE META (El secreto del estiramiento inmersivo)
-                const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
-                const mediaUpload = await prepareWAMessageMedia(
-                    { image: hdBuffer },
-                    { upload: whatsappSock.waUploadToServer }
-                );
-                hqImageMsg = mediaUpload.imageMessage;
-                console.log("[Tarjeta HD] Imagen subida al CDN de WhatsApp exitosamente.");
-
-                // 3. 🌟 MINIATURA BASE64 (Carga ultrarrápida mientras baja la versión HD)
+                
+                // 🌟 EL SECRETO REVELADO POR TU HTML: 
+                // Forzamos la proporción a 1.91:1 (Banner) en una resolución media-alta.
                 thumbnailBuffer = await sharp(originalBuffer)
-                    .resize({ width: 400, height: 209, fit: 'cover' })
-                    .jpeg({ quality: 45 })
+                    .resize({ width: 600, height: 314, fit: 'cover' })
+                    .jpeg({ quality: calidad })
                     .toBuffer();
+
+                // 🌟 PROTECCIÓN DE PAYLOAD (El límite de Meta es ~45KB)
+                // Si nos pasamos de peso, WhatsApp descarta la imagen o achica la tarjeta.
+                while (thumbnailBuffer.length > 45000 && calidad > 10) {
+                    calidad -= 5;
+                    thumbnailBuffer = await sharp(originalBuffer)
+                        .resize({ width: 600, height: 314, fit: 'cover' })
+                        .jpeg({ quality: calidad })
+                        .toBuffer();
+                }
+                console.log(`[Tarjeta HD] Base64 listo. Peso seguro: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
             }
         } catch (e) {
-            console.warn("[Tarjeta HD] Fallo al generar miniatura de CDN:", e.message);
+            console.warn("[Tarjeta HD] Fallo al generar miniatura Base64:", e.message);
         }
     }
 
@@ -1053,22 +1048,10 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
         description: linkData.description || ""
     };
 
-    // Inyectamos el Base64 inicial (Para que no quede el hueco gris al llegar el mensaje)
+    // 🚀 Pasamos SOLO el buffer puro. WhatsApp decodificará el JPEG, 
+    // verá que es rectangular (600x314) y activará el 'high-quality-layout'.
     if (thumbnailBuffer) {
         payloadExtended.jpegThumbnail = thumbnailBuffer;
-    }
-
-    // 🚀 INYECCIÓN DE LLAVES CDN DE META (Obliga a WhatsApp a renderizar la versión gigante)
-    if (hqImageMsg) {
-        payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
-        payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
-        payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
-        payloadExtended.mediaKey = hqImageMsg.mediaKey;
-        payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
-        
-        // Le confirmamos a la app del cliente las medidas exactas
-        payloadExtended.thumbnailHeight = 418;
-        payloadExtended.thumbnailWidth = 800;
     }
 
     const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
