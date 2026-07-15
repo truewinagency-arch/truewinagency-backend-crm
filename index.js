@@ -708,11 +708,11 @@ app.post('/send-image', async (req, res) => {
         await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: captionFinal });
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
-        await guardarMensajeBD(numero, "TrueWin", captionFinal || "[Imagen enviada]", 'out', null, urlImagen, 'image');
+        await guardarMensajeBD(numero, "TrueWin", captionFinal || "", 'out', null, urlImagen, 'image');
         
         // 🚀 EMISIÓN FALTANTE PARA DIBUJAR LA BURBUJA EN VIVO
         io.emit('nuevo-mensaje', { 
-            numero: jid, nombre: "TrueWin", texto: captionFinal || "[Imagen enviada]", 
+            numero: jid, nombre: "TrueWin", texto: captionFinal || "", 
             hora: new Date().toISOString(), timestamp: Date.now(),
             remitente: null, mediaUrl: urlImagen, mediaType: 'image', tipo: 'out'
         });
