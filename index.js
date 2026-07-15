@@ -1000,7 +1000,6 @@ app.delete('/api/plantillas/:id', async (req, res) => {
     }
 });
 
-const sharp = require('sharp');
 // Si usas fetch nativo de Node.js (disponible en versiones modernas) o axios:
 const axios = require('axios'); 
 
