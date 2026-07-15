@@ -659,16 +659,13 @@ app.put('/api/contactos/:jid', async (req, res) => {
 });
 
 // =====================================================================
-// 🌐 ENDPOINT MANUAL: BANNER HD CRISTALINO (SIN CDN - RECTÁNGULO PURO)
-// =====================================================================
-// =====================================================================
-// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (JIMP ORIGINAL RESTAURADO)
+// 🌐 ENDPOINT MANUAL: HQ LINK PREVIEWS (LÓGICA ORIGINAL RESTAURADA)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
     const { numero, mensaje, linkData } = req.body;
     if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
     
-    // 🚀 SALVAVIDAS ANTI-408: Le da tiempo al servidor de responderle a WhatsApp
+    // 🚀 SALVAVIDAS ANTI-408
     const respirar = () => new Promise(resolve => setTimeout(resolve, 50));
 
     try {
@@ -692,25 +689,34 @@ app.post('/send-text', async (req, res) => {
                         const arrayBuffer = await resImagen.arrayBuffer();
                         await respirar(); 
                         
-                        const Jimp = require('jimp');
-                        const image = await Jimp.read(Buffer.from(arrayBuffer));
-                        await respirar(); 
-
-                        image.background(0xFFFFFFFF);
+                        const sharp = require('sharp');
                         
-                        // Prevención de congelamiento (Mantenemos tu lógica intacta)
-                        if (image.bitmap.width > 800 || image.bitmap.height > 800) {
-                            image.scaleToFit(800, 800);
+                        // 1. REPLICAMOS TU LÓGICA: Leemos medidas originales
+                        const metadata = await sharp(Buffer.from(arrayBuffer)).metadata();
+                        let targetWidth = metadata.width;
+                        let targetHeight = metadata.height;
+                        
+                        // 2. REPLICAMOS TU LÓGICA: scaleToFit(800, 800)
+                        if (targetWidth > 800 || targetHeight > 800) {
+                            const ratio = Math.min(800 / targetWidth, 800 / targetHeight);
+                            targetWidth = Math.round(targetWidth * ratio);
+                            targetHeight = Math.round(targetHeight * ratio);
                         }
-                        
-                        realWidth = image.bitmap.width;
-                        realHeight = image.bitmap.height;
+
+                        // 3. Procesamos la imagen base (Fondo blanco, escalada proporcional exacta)
+                        const baseImage = sharp(Buffer.from(arrayBuffer))
+                            .resize(targetWidth, targetHeight, { fit: 'inside' })
+                            .flatten({ background: { r: 255, g: 255, b: 255 } });
+                            
+                        const bufferHQ = await baseImage.clone().jpeg({ quality: 90 }).toBuffer();
                         await respirar(); 
 
-                        // 1. SUBIMOS EL BÚFER HD AL CDN DE META
-                        const bufferHQ = await image.getBufferAsync(Jimp.MIME_JPEG);
-                        await respirar();
+                        // 4. REPLICAMOS TU LÓGICA: Extraemos medidas reales finales
+                        const finalMeta = await sharp(bufferHQ).metadata();
+                        realWidth = finalMeta.width;
+                        realHeight = finalMeta.height;
 
+                        // 5. SUBIMOS EL BÚFER HD AL CDN DE META
                         const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
                         const mediaUpload = await prepareWAMessageMedia(
                             { image: bufferHQ },
@@ -719,18 +725,14 @@ app.post('/send-text', async (req, res) => {
                         hqImageMsg = mediaUpload.imageMessage;
                         console.log("[Backend] Imagen HQ subida al CDN de Meta exitosamente.");
 
-                        // 2. 🚀 SOLUCIÓN A LA PIXELACIÓN (Sin dañar tu código)
-                        // Ya no encogemos la imagen a 300px. La dejamos en 800px (HD).
-                        // Solo bajamos el "peso" del archivo (quality) para que pase el filtro de WhatsApp.
-                        const thumbImage = image.clone();
+                        // 6. 🚀 SOLUCIÓN A LA PIXELACIÓN (Sin dañar tu código)
+                        // NO achicamos a 300px. Usamos la imagen grande y solo bajamos el "peso".
                         let currentQuality = 70;
-                        thumbImage.quality(currentQuality);
-                        let bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
+                        let bufferProcesado = await baseImage.clone().jpeg({ quality: currentQuality }).toBuffer();
                         
                         while (bufferProcesado.length > 55000 && currentQuality > 10) {
                             currentQuality -= 10;
-                            thumbImage.quality(currentQuality);
-                            bufferProcesado = await thumbImage.getBufferAsync(Jimp.MIME_JPEG);
+                            bufferProcesado = await baseImage.clone().jpeg({ quality: currentQuality }).toBuffer();
                         }
                         thumbnailBuffer = bufferProcesado;
                         console.log(`[Backend] Base64 listo en HD. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
@@ -745,7 +747,7 @@ app.post('/send-text', async (req, res) => {
             }
 
             // =================================================================
-            // 🚀 3. ENSAMBLAJE PROTOBUF NATIVO (Tu estructura original)
+            // 🚀 ENSAMBLAJE PROTOBUF NATIVO (Tu estructura original)
             // =================================================================
             const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
