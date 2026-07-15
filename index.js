@@ -684,6 +684,20 @@ app.post('/send-text', async (req, res) => {
         }
 
         await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
+
+        // 🚀 EMISIÓN EN TIEMPO REAL: Sincroniza todas las pantallas abiertas del CRM
+        io.emit('nuevo-mensaje', { 
+            numero: jidReal, 
+            nombre: "TrueWin", 
+            texto: mensajeFinal, 
+            hora: new Date().toISOString(),
+            timestamp: Date.now(),
+            remitente: null,
+            mediaUrl: null,
+            mediaType: null,
+            tipo: 'out'
+        });
+
         res.json({ success: true });
     } catch (error) {
         console.error("Fallo al enviar texto manual con auto-tarjeta:", error);
@@ -709,6 +723,20 @@ app.post('/send-image', async (req, res) => {
 
         // Guardamos en la base de datos con el texto real que vió el usuario
         await guardarMensajeBD(numero, "TrueWin", captionFinal || "[Imagen enviada]", 'out', null, urlImagen, 'image');
+
+        // 🚀 EMISIÓN EN TIEMPO REAL: Sincroniza la foto en todos los dispositivos
+        io.emit('nuevo-mensaje', { 
+            numero: jid, 
+            nombre: "TrueWin", 
+            texto: captionFinal || "[Imagen enviada]", 
+            hora: new Date().toISOString(),
+            timestamp: Date.now(),
+            remitente: null,
+            mediaUrl: urlImagen,
+            mediaType: 'image',
+            tipo: 'out'
+        });
+
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando imagen a ${numero}:`, error);
@@ -737,6 +765,20 @@ app.post('/send-video', async (req, res) => {
 
         // Guardamos en la base de datos con el texto real que vió el usuario
         await guardarMensajeBD(numero, "TrueWin", captionFinal || "[Video enviado]", 'out', null, urlVideo, 'video');
+
+        // 🚀 EMISIÓN EN TIEMPO REAL: Sincroniza el video en todos los dispositivos
+        io.emit('nuevo-mensaje', { 
+            numero: jid, 
+            nombre: "TrueWin", 
+            texto: captionFinal || "[Video enviado]", 
+            hora: new Date().toISOString(),
+            timestamp: Date.now(),
+            remitente: null,
+            mediaUrl: urlVideo,
+            mediaType: 'video',
+            tipo: 'out'
+        });
+
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando video a ${numero}:`, error);
@@ -769,6 +811,20 @@ app.post('/send-audio', async (req, res) => {
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
         await guardarMensajeBD(numero, "TrueWin", "[Nota de voz enviada]", 'out', null, urlAudio, 'audio');
+
+        // 🚀 EMISIÓN EN TIEMPO REAL: Sincroniza la nota de voz en todos los dispositivos
+        io.emit('nuevo-mensaje', { 
+            numero: jid, 
+            nombre: "TrueWin", 
+            texto: "[Nota de voz enviada]", 
+            hora: new Date().toISOString(),
+            timestamp: Date.now(),
+            remitente: null,
+            mediaUrl: urlAudio,
+            mediaType: 'audio',
+            tipo: 'out'
+        });
+
         res.json({ success: true });
     } catch (error) {
         console.error(`[Error] Fallo enviando audio a ${numero}:`, error);
