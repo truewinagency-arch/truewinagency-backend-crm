@@ -1001,7 +1001,7 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 });
 
 // Si usas fetch nativo de Node.js (disponible en versiones modernas) o axios:
-const axios = require('axios'); 
+
 
 /**
  * Envía un mensaje con una tarjeta de enlace optimizada en HD
