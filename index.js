@@ -996,8 +996,12 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 // =========================================================================
 // 🚀 FÁBRICA DE TARJETAS HD (SIN BORDES BLANCOS)
 // =========================================================================
+// =========================================================================
+// 🚀 FÁBRICA DE TARJETAS HD DEFINITIVA (CDN META + SHARP)
+// =========================================================================
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
     let thumbnailBuffer = null;
+    let hqImageMsg = null;
 
     let textoVisible = mensajeFinal || "";
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
@@ -1006,33 +1010,36 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
 
     if (linkData && linkData.imageUrl) {
         try {
-            console.log(`[Tarjeta HD] Procesando portada inmersiva para: ${linkData.imageUrl}`);
+            console.log(`[Tarjeta HD] Descargando y procesando portada: ${linkData.imageUrl}`);
             const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             
             if (resImagen.ok) {
                 const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
-                let calidad = 85; // Calidad inicial alta
                 
-                // 🌟 SECRETO HD: Obligamos a la imagen a tener un formato rectangular 1.91:1 (Banner de Cine)
-                // y aumentamos el ancho a 720px. Esto dispara el 'high-quality-layout' en Meta.
-                thumbnailBuffer = await sharp(originalBuffer)
-                    .resize({ width: 720, height: 377, fit: 'cover', withoutEnlargement: true })
-                    .jpeg({ quality: calidad })
+                // 1. 🌟 RENDERIZADO HD (800x418 - Formato Cine Exacto 1.91:1)
+                const sharp = require('sharp');
+                const hdBuffer = await sharp(originalBuffer)
+                    .resize({ width: 800, height: 418, fit: 'cover', withoutEnlargement: true })
+                    .jpeg({ quality: 85 })
                     .toBuffer();
 
-                // 🌟 NUEVO LÍMITE DE PESO: WhatsApp soporta hasta ~64KB en el Base64.
-                // Reducimos la compresión para permitir tarjetas nítidas de hasta 50KB.
-                while (thumbnailBuffer.length > 50000 && calidad > 10) {
-                    calidad -= 8;
-                    thumbnailBuffer = await sharp(originalBuffer)
-                        .resize({ width: 720, height: 377, fit: 'cover', withoutEnlargement: true })
-                        .jpeg({ quality: calidad })
-                        .toBuffer();
-                }
-                console.log(`[Tarjeta HD] Renderizado exitoso. Peso final: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                // 2. 🌟 SUBIDA AL CDN DE META (El secreto del estiramiento inmersivo)
+                const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+                const mediaUpload = await prepareWAMessageMedia(
+                    { image: hdBuffer },
+                    { upload: whatsappSock.waUploadToServer }
+                );
+                hqImageMsg = mediaUpload.imageMessage;
+                console.log("[Tarjeta HD] Imagen subida al CDN de WhatsApp exitosamente.");
+
+                // 3. 🌟 MINIATURA BASE64 (Carga ultrarrápida mientras baja la versión HD)
+                thumbnailBuffer = await sharp(originalBuffer)
+                    .resize({ width: 400, height: 209, fit: 'cover' })
+                    .jpeg({ quality: 45 })
+                    .toBuffer();
             }
         } catch (e) {
-            console.warn("[Tarjeta HD] Fallo al generar miniatura:", e.message);
+            console.warn("[Tarjeta HD] Fallo al generar miniatura de CDN:", e.message);
         }
     }
 
@@ -1043,17 +1050,25 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
         matchedText: linkData.url,
         canonicalUrl: linkData.url,
         title: linkData.title || "Enlace",
-        description: linkData.description || "",
-        
-        // 🚀 LA PIEZA DORADA: Le dice a WhatsApp el tamaño exacto antes de que renderice
-        // Esto obliga a la plataforma a activar el 'high-quality-layout' vertical
-        thumbnailWidthPixels: 720,
-        thumbnailHeightPixels: 377
+        description: linkData.description || ""
     };
 
-    // Solo inyectamos la imagen si se generó bien
+    // Inyectamos el Base64 inicial (Para que no quede el hueco gris al llegar el mensaje)
     if (thumbnailBuffer) {
         payloadExtended.jpegThumbnail = thumbnailBuffer;
+    }
+
+    // 🚀 INYECCIÓN DE LLAVES CDN DE META (Obliga a WhatsApp a renderizar la versión gigante)
+    if (hqImageMsg) {
+        payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
+        payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
+        payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
+        payloadExtended.mediaKey = hqImageMsg.mediaKey;
+        payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+        
+        // Le confirmamos a la app del cliente las medidas exactas
+        payloadExtended.thumbnailHeight = 418;
+        payloadExtended.thumbnailWidth = 800;
     }
 
     const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
@@ -1062,7 +1077,6 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
 
     await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 }
-
 
 
 // 🚀 CEREBRO DEL CHATBOT EN LA NUBE: Evalúa palabras clave 24/7 de forma autónoma
