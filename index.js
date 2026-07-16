@@ -1000,10 +1000,10 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 // =========================================================================
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
     let thumbnailBuffer = null;
-    let finalWidth = 0;
-    let finalHeight = 0;
+    let hqImageMsg = null;
+    let realWidth = 0;
+    let realHeight = 0;
 
-    // Estructuración del cuerpo del texto
     let textoVisible = mensajeFinal || "";
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
         textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
@@ -1011,80 +1011,100 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
 
     if (linkData && linkData.imageUrl) {
         try {
-            console.log(`[Tarjeta Orgánica] Analizando imagen por defecto: ${linkData.imageUrl}`);
+            console.log(`[Tarjeta HD] Descargando imagen original: ${linkData.imageUrl}`);
             const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             
             if (resImagen.ok) {
                 const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                 const sharp = require('sharp');
                 
-                // 1. 🌟 LECTURA DE METADATOS: Extraemos la resolución real por defecto de la imagen
+                // 1. Extraemos las medidas originales
                 const metadata = await sharp(originalBuffer).metadata();
-                let originalWidth = metadata.width || 800;
-                let originalHeight = metadata.height || 418;
+                let targetWidth = metadata.width || 800;
+                let targetHeight = metadata.height || 418;
                 
-                // 2. ESCALADO PROPORCIONAL INTELIGENTE (No deforma, no estira forzadamente)
-                // Si la imagen es gigante, la reducimos manteniendo su aspecto original exacto
-                if (originalWidth > 800) {
-                    originalHeight = Math.round((800 / originalWidth) * originalHeight);
-                    originalWidth = 800;
+                // 2. Escalamos manteniendo la proporción exacta (Máximo 800px para no colapsar la RAM)
+                if (targetWidth > 800) {
+                    const ratio = 800 / targetWidth;
+                    targetWidth = Math.round(targetWidth * ratio);
+                    targetHeight = Math.round(targetHeight * ratio);
                 }
-                
-                finalWidth = originalWidth;
-                finalHeight = originalHeight;
-                let calidad = 80;
 
-                // Renderizamos respetando el tamaño y proporciones nativas de la web
-                thumbnailBuffer = await sharp(originalBuffer)
-                    .resize({ width: finalWidth, height: finalHeight, fit: 'inside' })
-                    .jpeg({ quality: calidad })
+                // 3. Creamos el buffer HD (Fondo blanco puro, sin transparencias problemáticas)
+                const hdBuffer = await sharp(originalBuffer)
+                    .resize(targetWidth, targetHeight, { fit: 'inside' })
+                    .flatten({ background: { r: 255, g: 255, b: 255 } })
+                    .jpeg({ quality: 90 })
                     .toBuffer();
 
-                // 3. 🛡️ FILTRO DE PESO STRICTO ANTI-BLOQUEO
-                // Mantener el búfer debajo de 40KB es lo que asegura que el servidor de Meta 
-                // no clasifique el paquete como corrupto y se lo entregue al receptor de inmediato.
-                while (thumbnailBuffer.length > 40000 && calidad > 10) {
-                    calidad -= 5;
-                    thumbnailBuffer = await sharp(originalBuffer)
-                        .resize({ width: finalWidth, height: finalHeight, fit: 'inside' })
-                        .jpeg({ quality: calidad })
+                // 4. 🌟 Medimos el tamaño EXACTO resultante (Esto evita la caja transparente)
+                const hdMetadata = await sharp(hdBuffer).metadata();
+                realWidth = hdMetadata.width;
+                realHeight = hdMetadata.height;
+
+                // 5. 🌟 SUBIDA AL CDN: Obligatorio para activar el diseño gigante de WhatsApp
+                const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+                const mediaUpload = await prepareWAMessageMedia(
+                    { image: hdBuffer },
+                    { upload: whatsappSock.waUploadToServer }
+                );
+                hqImageMsg = mediaUpload.imageMessage;
+                console.log("[Backend] Imagen HQ subida al CDN exitosamente.");
+
+                // 6. 🌟 BASE64 DE RESPALDO (Sin pixelar)
+                // En vez de achicar la imagen, usamos la misma HD y solo le bajamos la calidad de compresión
+                let currentQuality = 70;
+                thumbnailBuffer = await sharp(hdBuffer)
+                    .jpeg({ quality: currentQuality })
+                    .toBuffer();
+                
+                while (thumbnailBuffer.length > 55000 && currentQuality > 10) {
+                    currentQuality -= 10;
+                    thumbnailBuffer = await sharp(hdBuffer)
+                        .jpeg({ quality: currentQuality })
                         .toBuffer();
                 }
-                console.log(`[Tarjeta Orgánica] Procesada con éxito a ${finalWidth}x${finalHeight}. Peso seguro: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
+                console.log(`[Backend] Base64 HD listo. Peso: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
             }
         } catch (e) {
-            console.warn("[Tarjeta Orgánica] Fallo al procesar proporciones nativas:", e.message);
+            console.warn("[Backend] Fallo al procesar la imagen:", e.message);
         }
     }
 
     const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
-    // 4. ENSAMBLAJE PROTOBUF PURO (100% idéntico al comportamiento humano)
     const payloadExtended = {
         text: textoVisible, 
         matchedText: linkData.url,
         canonicalUrl: linkData.url,
         title: linkData.title || "Enlace",
-        description: linkData.description || ""
+        description: linkData.description || "",
+        previewType: 0 
     };
 
     if (thumbnailBuffer) {
-        // Inyectamos el Base64 limpio sin CDN intermediarios
         payloadExtended.jpegThumbnail = thumbnailBuffer;
-        
-        // Informamos a la aplicación receptora las dimensiones reales de tu imagen
-        payloadExtended.thumbnailWidth = finalWidth;
-        payloadExtended.thumbnailHeight = finalHeight;
     }
 
-    // Acoplamos el contenido usando el validador estándar de Baileys
+    if (hqImageMsg) {
+        // Inyectamos llaves del CDN para forzar la tarjeta completa
+        payloadExtended.thumbnailDirectPath = hqImageMsg.directPath;
+        payloadExtended.thumbnailSha256 = hqImageMsg.fileSha256;
+        payloadExtended.thumbnailEncSha256 = hqImageMsg.fileEncSha256;
+        payloadExtended.mediaKey = hqImageMsg.mediaKey;
+        payloadExtended.mediaKeyTimestamp = hqImageMsg.mediaKeyTimestamp;
+        
+        // Medidas exactas sincronizadas con el archivo subido
+        payloadExtended.thumbnailWidth = realWidth;
+        payloadExtended.thumbnailHeight = realHeight;
+    }
+
     const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
         extendedTextMessage: payloadExtended
     }, { userJid: whatsappSock.user.id });
 
-    // Despachamos el paquete directamente al túnel de mensajes
     await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
-    console.log(`[Tarjeta Orgánica] Mensaje transmitido de forma segura al JID: ${jidReal}`);
+    console.log(`[Tarjeta HD] Mensaje transmitido de forma segura al JID: ${jidReal}`);
 }
 
 
