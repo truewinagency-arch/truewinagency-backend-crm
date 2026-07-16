@@ -1207,39 +1207,10 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             let textoOriginal = msj.texto || "";
             let mUrl = msj.url || null;
             let mType = null;
+            const jidReal = formatearJid(numeroDestino);
 
             // Procesamiento Spintax
             let textoBurbuja = msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace' ? procesarSpintax(textoOriginal) : textoOriginal;
-
-            if (msj.tipo === 'media' && msj.url) {
-                // 🚀 LA CURA: Dejamos de adivinar por el nombre de la URL. 
-                // Leémos la cabecera real del archivo directamente desde Firebase.
-                try {
-                    const headRes = await fetch(msj.url, { method: 'HEAD' });
-                    const contentType = headRes.headers.get('content-type') || '';
-                    
-                    if (contentType.includes('video')) {
-                        mType = 'video';
-                    } else if (contentType.includes('image')) {
-                        mType = 'image';
-                    } else {
-                        // Respaldo extremo
-                        const urlMin = msj.url.toLowerCase();
-                        mType = (urlMin.includes('.mp4') || urlMin.includes('.mov') || urlMin.includes('.avi') || urlMin.includes('video')) ? 'video' : 'image';
-                    }
-                } catch (error) {
-                    const urlMin = msj.url.toLowerCase();
-                    mType = (urlMin.includes('.mp4') || urlMin.includes('.mov') || urlMin.includes('.avi') || urlMin.includes('video')) ? 'video' : 'image';
-                }
-                
-                if (!textoBurbuja) textoBurbuja = mType === 'video' ? "[Video enviado]" : "[Imagen enviada]";
-            } else if (msj.tipo === 'audio') {
-                mType = 'audio';
-                textoBurbuja = "[Nota de voz enviada]";
-            } else if (msj.tipo === 'enlace') {
-                mType = 'link'; 
-                if (msj.linkData && msj.linkData.url) mUrl = msj.linkData.url; 
-            }
 
             // Telemetría humana...
             try {
@@ -1260,9 +1231,7 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 }
             } catch (e) { }
 
-            const jidReal = formatearJid(numeroDestino);
-
-            // 🚀 DISPARO CORREGIDO
+            // 🚀 DISPARO CORREGIDO: LECTURA EN RAM Y FORZADO DE FORMATO
             if (msj.tipo === 'texto') {
                 const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
                 const urls = textoBurbuja.match(urlRegex);
@@ -1274,13 +1243,42 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                     await whatsappSock.sendMessage(jidReal, { text: textoBurbuja });
                 }
             } else if (msj.tipo === 'media' && msj.url) {
-                if (mType === 'video') {
-                    // 🎥 Ahora el servidor sabe 100% que es un video y lo despacha correctamente
-                    await whatsappSock.sendMessage(jidReal, { video: { url: msj.url }, caption: textoBurbuja });
-                } else {
-                    await whatsappSock.sendMessage(jidReal, { image: { url: msj.url }, caption: textoBurbuja });
+                try {
+                    console.log(`[Bot Nube] Descargando y analizando archivo: ${msj.url}`);
+                    
+                    // 1. Descargamos el archivo a la RAM del servidor (Súper rápido y no falla el stream)
+                    const resMedia = await fetch(msj.url);
+                    const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
+                    
+                    // 2. Leemos la etiqueta interna (ADN) directa desde Firebase Storage
+                    const contentType = resMedia.headers.get('content-type') || '';
+
+                    // 3. Ya no adivinamos. Si es video, forzamos el empaquetado de video.
+                    if (contentType.includes('video') || msj.url.toLowerCase().includes('.mp4') || msj.url.toLowerCase().includes('.mov')) {
+                        mType = 'video';
+                        if (!textoBurbuja) textoBurbuja = "[Video enviado]";
+                        
+                        // 🚀 OBLIGAMOS a Baileys y a Meta a procesarlo como Video MP4
+                        await whatsappSock.sendMessage(jidReal, { 
+                            video: bufferMedia, 
+                            caption: textoBurbuja, 
+                            mimetype: 'video/mp4' 
+                        });
+                    } else {
+                        mType = 'image';
+                        if (!textoBurbuja) textoBurbuja = "[Imagen enviada]";
+                        
+                        await whatsappSock.sendMessage(jidReal, { 
+                            image: bufferMedia, 
+                            caption: textoBurbuja 
+                        });
+                    }
+                } catch (error) {
+                    console.error("[Bot Nube] Error crítico procesando media:", error);
                 }
             } else if (msj.tipo === 'audio' && msj.url) {
+                mType = 'audio';
+                if (!textoBurbuja) textoBurbuja = "[Nota de voz enviada]";
                 await whatsappSock.sendMessage(jidReal, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
             }
 
