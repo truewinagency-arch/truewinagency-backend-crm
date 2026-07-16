@@ -707,12 +707,16 @@ app.post('/send-image', async (req, res) => {
 
         await whatsappSock.sendPresenceUpdate('composing', jid);
         await delay(Math.floor(Math.random() * 1500) + 2000); 
-        await whatsappSock.sendMessage(jid, { image: { url: urlImagen }, caption: captionFinal });
+
+        // 🚀 DESCARGA EN RAM: Garantiza que la imagen no llegue rota
+        const resMedia = await fetch(urlImagen);
+        const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
+
+        await whatsappSock.sendMessage(jid, { image: bufferMedia, caption: captionFinal });
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
         await guardarMensajeBD(numero, "TrueWin", captionFinal || "", 'out', null, urlImagen, 'image');
         
-        // 🚀 EMISIÓN FALTANTE PARA DIBUJAR LA BURBUJA EN VIVO
         io.emit('nuevo-mensaje', { 
             numero: jid, nombre: "TrueWin", texto: captionFinal || "", 
             hora: new Date().toISOString(), timestamp: Date.now(),
@@ -724,7 +728,7 @@ app.post('/send-image', async (req, res) => {
 });
 
 // =====================================================================
-// 🚀 ENDPOINT DE VIDEO PARCHEADO CON SOPORTE SPINTAX
+// 🚀 ENDPOINT DE VIDEO PARCHEADO (Descarga en RAM + Forzado de MP4)
 // =====================================================================
 app.post('/send-video', async (req, res) => {
     const { numero, urlVideo, caption } = req.body;
@@ -735,12 +739,24 @@ app.post('/send-video', async (req, res) => {
 
         await whatsappSock.sendPresenceUpdate('composing', jid);
         await delay(Math.floor(Math.random() * 2000) + 3000); 
-        await whatsappSock.sendMessage(jid, { video: { url: urlVideo }, caption: captionFinal });
+
+        console.log(`[API Video] Descargando video a RAM para envío seguro: ${urlVideo}`);
+        
+        // 🚀 EL TRUCO QUE SALVÓ LAS AUTOMATIZACIONES:
+        // Descargamos el video y lo forzamos a empacarse como MP4
+        const resMedia = await fetch(urlVideo);
+        const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
+
+        await whatsappSock.sendMessage(jid, { 
+            video: bufferMedia, 
+            caption: captionFinal,
+            mimetype: 'video/mp4' // Sello obligatorio para evitar la imagen rota
+        });
+        
         await whatsappSock.sendPresenceUpdate('paused', jid);
 
         await guardarMensajeBD(numero, "TrueWin", captionFinal || "[Video enviado]", 'out', null, urlVideo, 'video');
         
-        // 🚀 EMISIÓN FALTANTE PARA DIBUJAR LA BURBUJA EN VIVO
         io.emit('nuevo-mensaje', { 
             numero: jid, nombre: "TrueWin", texto: captionFinal || "[Video enviado]", 
             hora: new Date().toISOString(), timestamp: Date.now(),
@@ -748,7 +764,10 @@ app.post('/send-video', async (req, res) => {
         });
 
         res.json({ success: true });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+    } catch (error) { 
+        console.error("[API Video] Fallo al procesar archivo:", error);
+        res.status(500).json({ error: error.message }); 
+    }
 });
 
 app.post('/send-audio', async (req, res) => {
