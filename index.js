@@ -1212,18 +1212,20 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             let textoBurbuja = msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace' ? procesarSpintax(textoOriginal) : textoOriginal;
 
             if (msj.tipo === 'media' && msj.url) {
-                mType = msj.url.includes('.mp4') || msj.url.includes('.mov') ? 'video' : 'image';
+                // 🚀 CORRECCIÓN: Detección universal insensible a mayúsculas para no romper videos
+                const urlMin = msj.url.toLowerCase();
+                mType = (urlMin.includes('.mp4') || urlMin.includes('.mov') || urlMin.includes('.avi') || urlMin.includes('video')) ? 'video' : 'image';
+                
                 if (!textoBurbuja) textoBurbuja = mType === 'video' ? "[Video enviado]" : "[Imagen enviada]";
             } else if (msj.tipo === 'audio') {
                 mType = 'audio';
                 textoBurbuja = "[Nota de voz enviada]";
             } else if (msj.tipo === 'enlace') {
                 mType = 'link'; 
-                // Extraemos la URL principal para guardarla en el historial
                 if (msj.linkData && msj.linkData.url) mUrl = msj.linkData.url; 
             }
 
-            // 🚀 TELEMETRÍA HUMANA (Se mantiene idéntica)
+            // Telemetría humana...
             try {
                 if (msj.tipo === 'audio') {
                     await whatsappSock.sendPresenceUpdate('recording', numeroDestino);
@@ -1231,43 +1233,28 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 } else {
                     await whatsappSock.sendPresenceUpdate('composing', numeroDestino);
                     const caracteres = textoBurbuja ? textoBurbuja.length : 20;
-                    const velocidadPorLetra = Math.floor(Math.random() * (55 - 25 + 1)) + 25; 
-                    const tiempoReaccion = Math.floor(Math.random() * (800 - 300 + 1)) + 300;
-                    let tiempoTipeo = (caracteres * velocidadPorLetra) + tiempoReaccion;
+                    let tiempoTipeo = (caracteres * Math.floor(Math.random() * (55 - 25 + 1)) + 25) + Math.floor(Math.random() * (800 - 300 + 1)) + 300;
                     
                     const limiteMinimo = Math.floor(Math.random() * (1900 - 1200 + 1)) + 1200; 
                     const limiteMaximo = Math.floor(Math.random() * (6500 - 4800 + 1)) + 4800; 
+                    tiempoTipeo = Math.max(limiteMinimo, Math.min(tiempoTipeo, limiteMaximo));
                     
-                    if (tiempoTipeo < limiteMinimo) tiempoTipeo = limiteMinimo;
-                    if (tiempoTipeo > limiteMaximo) tiempoTipeo = limiteMaximo;
-                    
-                    tiempoTipeo = Math.floor(tiempoTipeo);
-                    console.log(`[Anti-Ban] Simulando tipeo por ${(tiempoTipeo / 1000).toFixed(2)}s para un mensaje de ${caracteres} letras.`);
+                    console.log(`[Anti-Ban] Simulando tipeo por ${(tiempoTipeo / 1000).toFixed(2)}s`);
                     await pause(tiempoTipeo);
                 }
             } catch (e) { }
 
-            // 🚀 DISPARO CORREGIDO: Integración del Motor de Tarjetas
-           if (msj.tipo === 'texto') {
-                // Escaneamos si el texto puro tiene un link (ej: bingowin.app o https://...)
+            // 🚀 DISPARO CORREGIDO Y SEGURO
+            if (msj.tipo === 'texto') {
                 const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
                 const urls = textoBurbuja.match(urlRegex);
 
                 if (urls && urls.length > 0) {
-                    const linkDetectado = urls[0];
-                    console.log(`[Bot Nube] Link detectado en el texto: ${linkDetectado}. Extrayendo info...`);
-                    
-                    // 1. Extraemos los datos de la web automáticamente
-                    const linkDataInfo = await extraerMetadatos(linkDetectado);
-                    
-                    // 2. Mandamos la tarjeta usando la Fábrica manual que ya sabemos que funciona
+                    const linkDataInfo = await extraerMetadatos(urls[0]);
                     await enviarTarjetaEnlace(numeroDestino, textoBurbuja, linkDataInfo);
                 } else {
-                    // Si es un texto sin enlaces, enviamos normal
                     await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
                 }
-
-            // Los demás tipos de mensajes se quedan idénticos
             } else if (msj.tipo === 'media' && msj.url) {
                 if (mType === 'video') {
                     await whatsappSock.sendMessage(numeroDestino, { video: { url: msj.url }, caption: textoBurbuja });
@@ -1278,24 +1265,22 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 await whatsappSock.sendMessage(numeroDestino, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
             }
 
-            // Apagamos estado de presencia
             try { await whatsappSock.sendPresenceUpdate('paused', numeroDestino); } catch (e) {}
 
-            // Guardamos en el historial
             await guardarMensajeBD(numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
 
-            // Emitimos por WebSockets al CRM
+            // 🚀 CORRECCIÓN DEL CRASH: Reemplazamos las variables globales por las del contexto de la función
             io.emit('nuevo-mensaje', { 
-            numero: identificador, 
-            nombre: nombrePerfil, 
-            texto: texto, 
-            hora: new Date().toISOString(),
-            timestamp: Date.now(), // 🚀 NUEVO: Vital para que la lógica de collage en vivo no falle
-            remitente: remitenteEspecifico,
-            mediaUrl: mediaUrl,
-            mediaType: mediaType,
-            tipo: tipoMensaje 
-        });
+                numero: numeroDestino, 
+                nombre: "TrueWin", 
+                texto: textoBurbuja, 
+                hora: new Date().toISOString(),
+                timestamp: Date.now(),
+                remitente: null,
+                mediaUrl: mUrl,
+                mediaType: mType,
+                tipo: 'out' 
+            });
 
             const delayHumano = Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500;
             await pause(delayHumano);
