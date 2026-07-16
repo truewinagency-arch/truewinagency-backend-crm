@@ -1245,24 +1245,30 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             } catch (e) { }
 
             // 🚀 DISPARO CORREGIDO Y SEGURO
+            const jidReal = formatearJid(numeroDestino);
+
+            // 🚀 DISPARO CORREGIDO Y SEGURO CON JID OFICIAL
             if (msj.tipo === 'texto') {
                 const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
                 const urls = textoBurbuja.match(urlRegex);
 
                 if (urls && urls.length > 0) {
                     const linkDataInfo = await extraerMetadatos(urls[0]);
-                    await enviarTarjetaEnlace(numeroDestino, textoBurbuja, linkDataInfo);
+                    await enviarTarjetaEnlace(jidReal, textoBurbuja, linkDataInfo);
                 } else {
-                    await whatsappSock.sendMessage(numeroDestino, { text: textoBurbuja });
+                    await whatsappSock.sendMessage(jidReal, { text: textoBurbuja });
                 }
             } else if (msj.tipo === 'media' && msj.url) {
                 if (mType === 'video') {
-                    await whatsappSock.sendMessage(numeroDestino, { video: { url: msj.url }, caption: textoBurbuja });
+                    // 🎥 CORREGIDO: Enviamos al jidReal oficial para que Meta acepte el stream de video
+                    await whatsappSock.sendMessage(jidReal, { video: { url: msj.url }, caption: textoBurbuja });
                 } else {
-                    await whatsappSock.sendMessage(numeroDestino, { image: { url: msj.url }, caption: textoBurbuja });
+                    // 📷 CORREGIDO: Enviamos al jidReal oficial
+                    await whatsappSock.sendMessage(jidReal, { image: { url: msj.url }, caption: textoBurbuja });
                 }
             } else if (msj.tipo === 'audio' && msj.url) {
-                await whatsappSock.sendMessage(numeroDestino, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+                // 🎵 CORREGIDO: Enviamos al jidReal oficial
+                await whatsappSock.sendMessage(jidReal, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
             }
 
             try { await whatsappSock.sendPresenceUpdate('paused', numeroDestino); } catch (e) {}
