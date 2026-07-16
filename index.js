@@ -1212,9 +1212,25 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
             let textoBurbuja = msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace' ? procesarSpintax(textoOriginal) : textoOriginal;
 
             if (msj.tipo === 'media' && msj.url) {
-                // 🚀 CORRECCIÓN: Detección universal insensible a mayúsculas para no romper videos
-                const urlMin = msj.url.toLowerCase();
-                mType = (urlMin.includes('.mp4') || urlMin.includes('.mov') || urlMin.includes('.avi') || urlMin.includes('video')) ? 'video' : 'image';
+                // 🚀 LA CURA: Dejamos de adivinar por el nombre de la URL. 
+                // Leémos la cabecera real del archivo directamente desde Firebase.
+                try {
+                    const headRes = await fetch(msj.url, { method: 'HEAD' });
+                    const contentType = headRes.headers.get('content-type') || '';
+                    
+                    if (contentType.includes('video')) {
+                        mType = 'video';
+                    } else if (contentType.includes('image')) {
+                        mType = 'image';
+                    } else {
+                        // Respaldo extremo
+                        const urlMin = msj.url.toLowerCase();
+                        mType = (urlMin.includes('.mp4') || urlMin.includes('.mov') || urlMin.includes('.avi') || urlMin.includes('video')) ? 'video' : 'image';
+                    }
+                } catch (error) {
+                    const urlMin = msj.url.toLowerCase();
+                    mType = (urlMin.includes('.mp4') || urlMin.includes('.mov') || urlMin.includes('.avi') || urlMin.includes('video')) ? 'video' : 'image';
+                }
                 
                 if (!textoBurbuja) textoBurbuja = mType === 'video' ? "[Video enviado]" : "[Imagen enviada]";
             } else if (msj.tipo === 'audio') {
@@ -1244,10 +1260,9 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 }
             } catch (e) { }
 
-            // 🚀 DISPARO CORREGIDO Y SEGURO
             const jidReal = formatearJid(numeroDestino);
 
-            // 🚀 DISPARO CORREGIDO Y SEGURO CON JID OFICIAL
+            // 🚀 DISPARO CORREGIDO
             if (msj.tipo === 'texto') {
                 const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
                 const urls = textoBurbuja.match(urlRegex);
@@ -1260,14 +1275,12 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
                 }
             } else if (msj.tipo === 'media' && msj.url) {
                 if (mType === 'video') {
-                    // 🎥 CORREGIDO: Enviamos al jidReal oficial para que Meta acepte el stream de video
+                    // 🎥 Ahora el servidor sabe 100% que es un video y lo despacha correctamente
                     await whatsappSock.sendMessage(jidReal, { video: { url: msj.url }, caption: textoBurbuja });
                 } else {
-                    // 📷 CORREGIDO: Enviamos al jidReal oficial
                     await whatsappSock.sendMessage(jidReal, { image: { url: msj.url }, caption: textoBurbuja });
                 }
             } else if (msj.tipo === 'audio' && msj.url) {
-                // 🎵 CORREGIDO: Enviamos al jidReal oficial
                 await whatsappSock.sendMessage(jidReal, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
             }
 
@@ -1275,7 +1288,6 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
 
             await guardarMensajeBD(numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
 
-            // 🚀 CORRECCIÓN DEL CRASH: Reemplazamos las variables globales por las del contexto de la función
             io.emit('nuevo-mensaje', { 
                 numero: numeroDestino, 
                 nombre: "TrueWin", 
