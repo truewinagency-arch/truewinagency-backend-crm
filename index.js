@@ -213,18 +213,17 @@ async function connectToWhatsApp(uid) {
 
     const { state, saveCreds } = {
         state: {
-            creds: cacheCreds,
+            creds: cacheLocal.creds, // 🚀 1. Usamos la memoria RAM específica de este usuario
             keys: {
                 get: async (type, ids) => {
                     const data = {};
                     for (const id of ids) {
                         const docId = `${type}-${id}`;
-                        data[id] = cacheKeys[docId];
+                        data[id] = cacheLocal.keys[docId]; // 🚀 2. Leemos las llaves del usuario
                     }
                     return data;
                 },
                 set: async (data) => {
-                    // 🚀 CAMBIO 1: Usamos 'let' para poder reasignar el lote más adelante
                     let batch = db.batch(); 
                     let contador = 0;
 
@@ -233,28 +232,24 @@ async function connectToWhatsApp(uid) {
                             const value = data[type][id];
                             const docId = `${type}-${id}`;
                             
-                            // Filtro Anti-Basura (Solo bloqueamos los grupos)
-                            if (docId.includes('lid-mapping')) {
-                                continue; 
-                            }
+                            if (docId.includes('lid-mapping')) continue; 
 
-                            const docRef = coleccionSesion.doc(docId);
+                            // 🚀 3. Apuntamos a la Bóveda Privada en Firestore de ESTE usuario
+                            const docRef = coleccionSesionUsuario.doc(docId); 
                             
                             if (value) {
-                                cacheKeys[docId] = value;
+                                cacheLocal.keys[docId] = value; 
                                 const stringifiedData = JSON.stringify(value, BufferJSON.replacer);
                                 batch.set(docRef, { payload: stringifiedData });
                             } else {
-                                delete cacheKeys[docId];
+                                delete cacheLocal.keys[docId];
                                 batch.delete(docRef);
                             }
                             
                             contador++;
-                            
-                            // 🚀 CAMBIO 2: Cuando llegamos a 490, subimos a la nube Y CREAMOS UN LOTE NUEVO FRESCO
                             if (contador >= 490) {
                                 await batch.commit().catch(e => console.error("Error en lote parcial:", e));
-                                batch = db.batch(); // <--- LA PIEZA FALTANTE: Inicializar lote nuevo
+                                batch = db.batch(); 
                                 contador = 0; 
                             }
                         }
