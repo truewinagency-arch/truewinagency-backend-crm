@@ -26,9 +26,10 @@ initializeApp({
 
 const db = getFirestore();
 db.settings({ ignoreUndefinedProperties: true });
-const coleccionSesion = db.collection('crm_whatsapp_session');
-const coleccionMensajes = db.collection('crm_mensajes');
-const coleccionPlantillas = db.collection('crm_plantillas'); // 🚀 NUEVA BASE PARA PLANTILL
+const getColeccionSesion = (uid) => db.collection('user_profiles').doc(uid).collection('crm_whatsapp_session');
+const getColeccionMensajes = (uid) => db.collection('user_profiles').doc(uid).collection('crm_mensajes');
+const getColeccionPlantillas = (uid) => db.collection('user_profiles').doc(uid).collection('crm_plantillas');
+const getColeccionContactos = (uid) => db.collection('user_profiles').doc(uid).collection('crm_contactos');
 
 const Jimp = require('jimp');
 const sharp = require('sharp');
@@ -44,10 +45,13 @@ function getHostNumber() {
 // 🚀 FUNCIÓN MAESTRA: Guarda cada disparo con soporte multimedia integral
 async function guardarMensajeBD(uid, numero, nombre, texto, tipo, remitente = null, mediaUrl = null, mediaType = null) {
     try {
-        if (!uid) return; 
+        if (!uid) {
+            console.error("Error: Se intentó guardar un mensaje sin proporcionar el UID.");
+            return; 
+        }
 
-        // 🌟 MAGIA: Guardamos en la subcolección privada del UID
-        await db.collection('usuarios').doc(uid).collection('crm_mensajes').add({
+        // 🌟 Guardamos en la subcolección privada del UID: usuarios/{uid}/crm_mensajes
+        await getColeccionMensajes(uid).add({
             numero: numero,
             nombre: nombre || "Desconocido",
             texto: texto,
@@ -59,7 +63,7 @@ async function guardarMensajeBD(uid, numero, nombre, texto, tipo, remitente = nu
             timestamp: Date.now() 
         });
     } catch (error) {
-        console.error("Error guardando en historial aislado:", error);
+        console.error(`Error guardando mensaje en historial aislado para el usuario ${uid}:`, error);
     }
 }
 
@@ -358,148 +362,152 @@ async function connectToWhatsApp(uid) {
     });
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
-        const msg = m.messages[0];
+    const msg = m.messages[0];
 
-        
-        
-        // 🚀 ESCUDO ANTI-ECO: Si el mensaje lo envió este mismo servidor, lo ignoramos.
-        // Ya fue guardado y dibujado por la función que lo disparó originalmente.
-        if (msg.key.fromMe && msg.key.id && idsEnviadosPorBot.has(msg.key.id)) {
-            return;
+    // 🚀 ESCUDO ANTI-ECO: Si el mensaje lo envió este mismo servidor, lo ignoramos.
+    // Ya fue guardado y dibujado por la función que lo disparó originalmente.
+    if (msg.key.fromMe && msg.key.id && idsEnviadosPorBot.has(msg.key.id)) {
+        return;
+    }
+
+    // Dejamos pasar todo lo demás (Mensajes del cliente y Mensajes enviados desde tu celular físico)
+    if (!msg.message || msg.key.remoteJid === 'status@broadcast' || msg.key.remoteJid.includes('@newsletter')) {
+        return;
+    }
+
+    const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
+
+    // EXTRAEMOS EL TIPO DE MENSAJE AL INICIO PARA LOS FILTROS
+    const messageType = Object.keys(msg.message || {})[0];
+
+    // Muro de contención para eventos de sistema.
+    if (
+        messageType === 'protocolMessage' || 
+        messageType === 'pollUpdateMessage' || 
+        messageType === 'pollCreationMessage' ||
+        messageType === 'reactionMessage' ||
+        messageType === 'senderKeyDistributionMessage'
+    ) {
+        return; 
+    }
+
+    // Filtra y destruye la sincronización histórica masiva
+    const tiempoActualUnix = Math.floor(Date.now() / 1000);
+    if (msg.messageTimestamp && (tiempoActualUnix - msg.messageTimestamp) > 60) {
+        console.log(`[Sincronización] Ignorando mensaje antiguo del JID: ${msg.key.remoteJid}`);
+        return;
+    }
+
+    const remoteJid = msg.key.remoteJid;
+    const esGrupo = remoteJid.endsWith('@g.us');
+    let nombrePerfil = msg.pushName || (esGrupo ? "Grupo de WhatsApp" : "Usuario"); 
+    let remitenteEspecifico = null; 
+
+    if (esGrupo) {
+        remitenteEspecifico = msg.pushName || msg.key.participant?.split('@')[0] || "Miembro";
+    }
+
+    // 🚀 CLAVE: Forzamos al servidor a esperar que el contacto/grupo se registre y asiente su nombre real en la cuenta del usuario
+    await registrarContactoInteligente(uid, remoteJid, msg.pushName, esGrupo);
+    
+    // Buscamos si ya guardamos un nombre personalizado o real para este JID en Firestore (Aislando por UID)
+    try {
+        const contactoDoc = await getColeccionContactos(uid).doc(remoteJid).get();
+        if (contactoDoc.exists) {
+            const cData = contactoDoc.data();
+            nombrePerfil = cData.nombrePersonalizado || cData.nombreOriginal || nombrePerfil;
         }
+    } catch (e) {
+        console.warn(`[Backend - UID: ${uid}] No se pudo cruzar el nombre en caliente:`, e.message);
+    }
+    
+    const identificador = remoteJid;
+    
+    // 🚀 Solo guardamos la llave para el "visto azul automático" si el mensaje es del cliente
+    if (tipoMensaje === 'in') {
+        // Aseguramos que la estructura exista para el usuario
+        if (!ultimosMensajesKey[uid]) ultimosMensajesKey[uid] = {};
+        ultimosMensajesKey[uid][identificador] = msg.key;
+    }
+    
+    // MOTOR DE TRADUCCIÓN MULTIMEDIA ENTRANTE
+    let texto = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
+    let mediaUrl = null;
+    let mediaType = null;
 
-        // Dejamos pasar todo lo demás (Mensajes del cliente y Mensajes enviados desde tu celular físico)
-        if (!msg.message || msg.key.remoteJid === 'status@broadcast' || msg.key.remoteJid.includes('@newsletter')) {
-            return;
-        }
+    if (messageType === 'imageMessage') {
+        mediaType = 'image';
+        texto = msg.message.imageMessage.caption || ""; 
+    } else if (messageType === 'videoMessage') {
+        mediaType = 'video';
+        texto = msg.message.videoMessage.caption || ""; 
+    } else if (messageType === 'audioMessage') {
+        mediaType = 'audio';
+        texto = ""; 
+    } else if (!texto) {
+        texto = "[Archivo o mensaje interactivo]";
+    }
 
-        const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
-
-        // EXTRAEMOS EL TIPO DE MENSAJE AL INICIO PARA LOS FILTROS
-        const messageType = Object.keys(msg.message || {})[0];
-
-        // Muro de contención para eventos de sistema.
-        if (
-            messageType === 'protocolMessage' || 
-            messageType === 'pollUpdateMessage' || 
-            messageType === 'pollCreationMessage' ||
-            messageType === 'reactionMessage' ||
-            messageType === 'senderKeyDistributionMessage'
-        ) {
-            return; 
-        }
-
-        // Filtra y destruye la sincronización histórica masiva
-        const tiempoActualUnix = Math.floor(Date.now() / 1000);
-        if (msg.messageTimestamp && (tiempoActualUnix - msg.messageTimestamp) > 60) {
-            console.log(`[Sincronización] Ignorando mensaje antiguo del JID: ${msg.key.remoteJid}`);
-            return;
-        }
-
-        const remoteJid = msg.key.remoteJid;
-        const esGrupo = remoteJid.endsWith('@g.us');
-        let nombrePerfil = msg.pushName || (esGrupo ? "Grupo de WhatsApp" : "Usuario"); 
-        let remitenteEspecifico = null; 
-
-        if (esGrupo) {
-            remitenteEspecifico = msg.pushName || msg.key.participant?.split('@')[0] || "Miembro";
-        }
-
-        // 🚀 CLAVE: Forzamos al servidor a esperar que el contacto/grupo se registre y asiente su nombre real
-        await registrarContactoInteligente(remoteJid, msg.pushName, esGrupo);
-        
-        // Buscamos si ya guardamos un nombre personalizado o real para este JID en Firestore
+    if (mediaType) {
         try {
-            const contactoDoc = await db.collection('crm_contactos').doc(remoteJid).get();
-            if (contactoDoc.exists) {
-                const cData = contactoDoc.data();
-                nombrePerfil = cData.nombrePersonalizado || cData.nombreOriginal || nombrePerfil;
-            }
-        } catch (e) {
-            console.warn("[Backend] No se pudo cruzar el nombre en caliente:", e.message);
-        }
-        
-        const identificador = remoteJid;
-        
-        // 🚀 Solo guardamos la llave para el "visto azul automático" si el mensaje es del cliente
-        if (tipoMensaje === 'in') {
-            ultimosMensajesKey[identificador] = msg.key;
-        }
-        
-        // MOTOR DE TRADUCCIÓN MULTIMEDIA ENTRANTE
-        let texto = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
-        let mediaUrl = null;
-        let mediaType = null;
+            const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { 
+                logger: pino({ level: 'error' }) 
+            });
+            
+            if (buffer) {
+                const crypto = require('crypto');
+                const token = crypto.randomUUID(); 
+                let extension = 'bin';
+                let contentType = 'application/octet-stream';
+                
+                if (mediaType === 'image') { extension = 'png'; contentType = 'image/png'; }
+                else if (mediaType === 'video') { extension = 'mp4'; contentType = 'video/mp4'; }
+                else if (mediaType === 'audio') { extension = 'ogg'; contentType = 'audio/ogg; codecs=opus'; }
 
-        if (messageType === 'imageMessage') {
-            mediaType = 'image';
-            texto = msg.message.imageMessage.caption || ""; 
-        } else if (messageType === 'videoMessage') {
-            mediaType = 'video';
-            texto = msg.message.videoMessage.caption || ""; 
-        } else if (messageType === 'audioMessage') {
-            mediaType = 'audio';
-            texto = ""; 
-        } else if (!texto) {
-            texto = "[Archivo o mensaje interactivo]";
-        }
-
-        if (mediaType) {
-            try {
-                const { downloadMediaMessage } = require('@whiskeysockets/baileys');
-                const buffer = await downloadMediaMessage(msg, 'buffer', {}, { 
-                    logger: pino({ level: 'error' }) 
+                // Aislar por subcarpeta del UID en Firebase Storage
+                const nombreArchivo = `crm_incoming/${uid}/${identificador.replace(/[^a-zA-Z0-9]/g, '')}_${Date.now()}.${extension}`;
+                const { getStorage } = require('firebase-admin/storage');
+                const bucket = getStorage().bucket('truezone-agency.firebasestorage.app');
+                const archivoBlob = bucket.file(nombreArchivo);
+                
+                await archivoBlob.save(buffer, {
+                    metadata: {
+                        metadata: { firebaseStorageDownloadTokens: token }
+                    },
+                    contentType: contentType
                 });
                 
-                if (buffer) {
-                    const crypto = require('crypto');
-                    const token = crypto.randomUUID(); 
-                    let extension = 'bin';
-                    let contentType = 'application/octet-stream';
-                    
-                    if (mediaType === 'image') { extension = 'png'; contentType = 'image/png'; }
-                    else if (mediaType === 'video') { extension = 'mp4'; contentType = 'video/mp4'; }
-                    else if (mediaType === 'audio') { extension = 'ogg'; contentType = 'audio/ogg; codecs=opus'; }
-
-                    const nombreArchivo = `crm_incoming/${identificador.replace(/[^a-zA-Z0-9]/g, '')}_${Date.now()}.${extension}`;
-                    const { getStorage } = require('firebase-admin/storage');
-                    const bucket = getStorage().bucket('truezone-agency.firebasestorage.app');
-                    const archivoBlob = bucket.file(nombreArchivo);
-                    
-                    await archivoBlob.save(buffer, {
-                        metadata: {
-                            metadata: { firebaseStorageDownloadTokens: token }
-                        },
-                        contentType: contentType
-                    });
-                    
-                    mediaUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(nombreArchivo)}?alt=media&token=${token}`;
-                }
-            } catch (err) {
-                console.error("Error procesando multimedia de WhatsApp:", err);
+                mediaUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(nombreArchivo)}?alt=media&token=${token}`;
             }
+        } catch (err) {
+            console.error(`[UID: ${uid}] Error procesando multimedia de WhatsApp:`, err);
         }
-        
-        // 🚀 GUARDADO DINÁMICO: Pasamos la variable 'tipoMensaje' ('in' u 'out') a la base de datos
-       await guardarMensajeBD(uid, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType);
+    }
+    
+    // 🚀 GUARDADO DINÁMICO: Pasamos la variable 'tipoMensaje' ('in' u 'out') a la base de datos
+    await guardarMensajeBD(uid, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType);
 
-        // 🚀 PROTECCIÓN DEL BOT
-        if (tipoMensaje === 'in') {
-            procesarBotEnNube(uid, identificador, texto, whatsappSock); // Pasamos las dependencias
+    // 🚀 PROTECCIÓN DEL BOT
+    if (tipoMensaje === 'in') {
+        const whatsappSockLocal = sesionesActivas.get(uid);
+        if (whatsappSockLocal) {
+            procesarBotEnNube(uid, identificador, texto, whatsappSockLocal);
         }
+    }
 
-        io.to(uid).emit('nuevo-mensaje', { 
-            numero: identificador, 
-            nombre: nombrePerfil, 
-            texto: texto, 
-            hora: new Date().toISOString(),
-            remitente: remitenteEspecifico,
-            mediaUrl: mediaUrl,
-            mediaType: mediaType,
-            tipo: tipoMensaje
-        });
+    // 🚀 EMISIÓN PRIVADA AL FRONTEND
+    io.to(uid).emit('nuevo-mensaje', { 
+        numero: identificador, 
+        nombre: nombrePerfil, 
+        texto: texto, 
+        hora: new Date().toISOString(),
+        remitente: remitenteEspecifico,
+        mediaUrl: mediaUrl,
+        mediaType: mediaType,
+        tipo: tipoMensaje
     });
-
+});
  
 
 whatsappSock.ev.on('creds.update', saveCreds);
@@ -656,103 +664,180 @@ app.post('/send-text', async (req, res) => {
     }
 });
 
-app.post('/send-image', async (req, res) => {
-    const { numero, urlImagen, caption } = req.body;
-    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
+app.post('/send-image', upload.single('file'), async (req, res) => {
     try {
-        const jid = formatearJid(numero);
-        const captionFinal = procesarSpintax(caption);
+        const { number, caption, uid } = req.body;
 
-        await whatsappSock.sendPresenceUpdate('composing', jid);
-        await delay(Math.floor(Math.random() * 1500) + 2000); 
+        if (!uid) {
+            return res.status(400).json({ success: false, message: 'Falta el parámetro uid.' });
+        }
 
-        // 🚀 DESCARGA EN RAM: Garantiza que la imagen no llegue rota
-        const resMedia = await fetch(urlImagen);
-        const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
+        const whatsappSockLocal = sesionesActivas.get(uid);
+        if (!whatsappSockLocal) {
+            return res.status(500).json({ success: false, message: `Instancia de WhatsApp no conectada para el usuario ${uid}` });
+        }
 
-        await whatsappSock.sendMessage(jid, { image: bufferMedia, caption: captionFinal });
-        await whatsappSock.sendPresenceUpdate('paused', jid);
+        if (!number || !req.file) {
+            return res.status(400).json({ success: false, message: 'Número y archivo de imagen son requeridos.' });
+        }
 
-        await guardarMensajeBD(numero, "TrueWin", captionFinal || "", 'out', null, urlImagen, 'image');
-        
-        io.emit('nuevo-mensaje', { 
-            numero: jid, nombre: "TrueWin", texto: captionFinal || "", 
-            hora: new Date().toISOString(), timestamp: Date.now(),
-            remitente: null, mediaUrl: urlImagen, mediaType: 'image', tipo: 'out'
+        const formattedNumber = `${number}@s.whatsapp.net`;
+        const filePath = req.file.path;
+
+        // Enviar imagen usando la instancia del usuario
+        const sentMessage = await whatsappSockLocal.sendMessage(formattedNumber, {
+            image: { url: filePath },
+            caption: caption || ''
         });
 
-        res.json({ success: true });
-    } catch (error) { res.status(500).json({ error: error.message }); }
-});
+        // Eliminar el archivo temporal
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
 
-// =====================================================================
-// 🚀 ENDPOINT DE VIDEO PARCHEADO (Descarga en RAM + Forzado de MP4)
-// =====================================================================
-app.post('/send-video', async (req, res) => {
-    const { numero, urlVideo, caption } = req.body;
-    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
-    try {
-        const jid = formatearJid(numero);
-        const captionFinal = procesarSpintax(caption);
+        const timestamp = new Date();
+        const responseData = {
+            id: sentMessage.key.id,
+            from: 'me',
+            to: number,
+            text: caption || '[Imagen]',
+            mediaUrl: sentMessage.message?.imageMessage?.url || '',
+            type: 'image',
+            timestamp: timestamp,
+            status: 'sent'
+        };
 
-        await whatsappSock.sendPresenceUpdate('composing', jid);
-        await delay(Math.floor(Math.random() * 2000) + 3000); 
+        // Guardar mensaje en la subcolección del usuario
+        await guardarMensajeBD(uid, formattedNumber, responseData);
 
-        console.log(`[API Video] Descargando video a RAM para envío seguro: ${urlVideo}`);
-        
-        // 🚀 EL TRUCO QUE SALVÓ LAS AUTOMATIZACIONES:
-        // Descargamos el video y lo forzamos a empacarse como MP4
-        const resMedia = await fetch(urlVideo);
-        const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
+        // Emitir Socket solo a la sala del usuario
+        io.to(uid).emit('nuevoMensaje', responseData);
 
-        await whatsappSock.sendMessage(jid, { 
-            video: bufferMedia, 
-            caption: captionFinal,
-            mimetype: 'video/mp4' // Sello obligatorio para evitar la imagen rota
-        });
-        
-        await whatsappSock.sendPresenceUpdate('paused', jid);
-
-        await guardarMensajeBD(numero, "TrueWin", captionFinal || "[Video enviado]", 'out', null, urlVideo, 'video');
-        
-        io.emit('nuevo-mensaje', { 
-            numero: jid, nombre: "TrueWin", texto: captionFinal || "[Video enviado]", 
-            hora: new Date().toISOString(), timestamp: Date.now(),
-            remitente: null, mediaUrl: urlVideo, mediaType: 'video', tipo: 'out'
-        });
-
-        res.json({ success: true });
-    } catch (error) { 
-        console.error("[API Video] Fallo al procesar archivo:", error);
-        res.status(500).json({ error: error.message }); 
+        res.json({ success: true, message: 'Imagen enviada con éxito.', data: responseData });
+    } catch (error) {
+        console.error('Error al enviar la imagen:', error);
+        res.status(500).json({ success: false, message: 'Error al enviar la imagen: ' + error.message });
     }
 });
 
-app.post('/send-audio', async (req, res) => {
-    const { numero, urlAudio } = req.body;
-    if (!whatsappSock) return res.status(500).json({ error: "WhatsApp no inicializado." });
+// ==========================================
+// ENDPOINT: ENVIAR VIDEO
+// ==========================================
+app.post('/send-video', upload.single('file'), async (req, res) => {
     try {
-        const jid = formatearJid(numero);
-        await whatsappSock.sendPresenceUpdate('recording', jid);
-        await delay(4000); 
-        
-        const esMP3 = urlAudio.toLowerCase().includes('.mp3');
-        await whatsappSock.sendMessage(jid, { 
-            audio: { url: urlAudio }, mimetype: esMP3 ? 'audio/mpeg' : 'audio/ogg; codecs=opus', ptt: !esMP3 
-        });
-        await whatsappSock.sendPresenceUpdate('paused', jid);
+        const { number, caption, uid } = req.body;
 
-        await guardarMensajeBD(numero, "TrueWin", "[Nota de voz enviada]", 'out', null, urlAudio, 'audio');
-        
-        // 🚀 EMISIÓN FALTANTE PARA DIBUJAR LA BURBUJA EN VIVO
-        io.emit('nuevo-mensaje', { 
-            numero: jid, nombre: "TrueWin", texto: "[Nota de voz enviada]", 
-            hora: new Date().toISOString(), timestamp: Date.now(),
-            remitente: null, mediaUrl: urlAudio, mediaType: 'audio', tipo: 'out'
+        if (!uid) {
+            return res.status(400).json({ success: false, message: 'Falta el parámetro uid.' });
+        }
+
+        const whatsappSockLocal = sesionesActivas.get(uid);
+        if (!whatsappSockLocal) {
+            return res.status(500).json({ success: false, message: `Instancia de WhatsApp no conectada para el usuario ${uid}` });
+        }
+
+        if (!number || !req.file) {
+            return res.status(400).json({ success: false, message: 'Número y archivo de video son requeridos.' });
+        }
+
+        const formattedNumber = `${number}@s.whatsapp.net`;
+        const filePath = req.file.path;
+
+        // Enviar video usando la instancia del usuario
+        const sentMessage = await whatsappSockLocal.sendMessage(formattedNumber, {
+            video: { url: filePath },
+            caption: caption || '',
+            mimetype: req.file.mimetype
         });
 
-        res.json({ success: true });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+        // Eliminar el archivo temporal
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+
+        const timestamp = new Date();
+        const responseData = {
+            id: sentMessage.key.id,
+            from: 'me',
+            to: number,
+            text: caption || '[Video]',
+            mediaUrl: sentMessage.message?.videoMessage?.url || '',
+            type: 'video',
+            timestamp: timestamp,
+            status: 'sent'
+        };
+
+        // Guardar mensaje en la subcolección del usuario
+        await guardarMensajeBD(uid, formattedNumber, responseData);
+
+        // Emitir Socket solo a la sala del usuario
+        io.to(uid).emit('nuevoMensaje', responseData);
+
+        res.json({ success: true, message: 'Video enviado con éxito.', data: responseData });
+    } catch (error) {
+        console.error('Error al enviar el video:', error);
+        res.status(500).json({ success: false, message: 'Error al enviar el video: ' + error.message });
+    }
+});
+
+// ==========================================
+// ENDPOINT: ENVIAR AUDIO / NOTA DE VOZ
+// ==========================================
+app.post('/send-audio', upload.single('file'), async (req, res) => {
+    try {
+        const { number, uid } = req.body;
+
+        if (!uid) {
+            return res.status(400).json({ success: false, message: 'Falta el parámetro uid.' });
+        }
+
+        const whatsappSockLocal = sesionesActivas.get(uid);
+        if (!whatsappSockLocal) {
+            return res.status(500).json({ success: false, message: `Instancia de WhatsApp no conectada para el usuario ${uid}` });
+        }
+
+        if (!number || !req.file) {
+            return res.status(400).json({ success: false, message: 'Número y archivo de audio son requeridos.' });
+        }
+
+        const formattedNumber = `${number}@s.whatsapp.net`;
+        const filePath = req.file.path;
+
+        // Enviar audio como PTT (Push To Talk / Nota de voz)
+        const sentMessage = await whatsappSockLocal.sendMessage(formattedNumber, {
+            audio: { url: filePath },
+            mimetype: 'audio/mp4',
+            ptt: true
+        });
+
+        // Eliminar el archivo temporal
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+
+        const timestamp = new Date();
+        const responseData = {
+            id: sentMessage.key.id,
+            from: 'me',
+            to: number,
+            text: '[Nota de voz]',
+            mediaUrl: sentMessage.message?.audioMessage?.url || '',
+            type: 'audio',
+            timestamp: timestamp,
+            status: 'sent'
+        };
+
+        // Guardar mensaje en la subcolección del usuario
+        await guardarMensajeBD(uid, formattedNumber, responseData);
+
+        // Emitir Socket solo a la sala del usuario
+        io.to(uid).emit('nuevoMensaje', responseData);
+
+        res.json({ success: true, message: 'Audio enviado con éxito.', data: responseData });
+    } catch (error) {
+        console.error('Error al enviar el audio:', error);
+        res.status(500).json({ success: false, message: 'Error al enviar el audio: ' + error.message });
+    }
 });
 
 
