@@ -312,103 +312,52 @@ async function connectToWhatsApp(uid) {
     const { DisconnectReason } = require('@whiskeysockets/baileys');
     const { Boom } = require('@hapi/boom'); 
 
-  whatsappSock.ev.on('connection.update', async (update) => {
+ whatsappSock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update; 
         
         if (qr) {
-            console.log("[TrueWin] Nuevo código QR generado. Enviando a la web...");
-            ultimoQR = qr;
-            io.emit('qr-update', qr);
+            console.log(`[TrueWin] Nuevo código QR para el UID: ${uid}`);
+            qrActivos.set(uid, qr); // Guardamos su QR en el diccionario global
+            io.to(uid).emit('qr-update', qr); // Emitimos SOLO a su sala privada
         }
 
         if (connection === 'close') {
             const errorBoom = lastDisconnect?.error instanceof Boom ? lastDisconnect.error : null;
             const codigoError = errorBoom ? errorBoom.output?.statusCode : (lastDisconnect?.error?.output?.statusCode || 500);
-            const razonError = errorBoom ? errorBoom.message : (lastDisconnect?.error?.message || 'Error desconocido');
             
-            console.log(`[TrueWin] Conexión cerrada. Código extraído: ${codigoError}. Razón: ${razonError}`);
-
-            if (codigoError === 440 || (razonError && razonError.includes('conflict'))) {
-                console.error("[🚨 Choque de Instancias] Se detectó otra sesión. Deteniendo reconexión.");
-                return; 
-            }
-
-            // 🚀 CORRECCIÓN DEFINITIVA: Destrucción por Falla de Conexión / Sesión Inválida (405 y 401)
             if (codigoError === 405 || codigoError === 401) {
-            console.error(`[🚨 ALERTA ${codigoError}] Credenciales corruptas. Purgando RAM y Firebase.`);
-            io.emit('estado-conexion', 'desconectado'); 
-            whatsappSock = null; 
-            
-            // 1. Limpiamos la RAM
-            cacheCreds = {}; 
-            cacheKeys = {}; 
-            cacheCargada = false;
+                io.to(uid).emit('estado-conexion', 'desconectado'); 
+                sesionesActivas.delete(uid); // Sacamos del mapa
+                cacheCriptografica.set(uid, { creds: {}, keys: {}, cargada: false });
 
-            // 2. 🌟 EL PARARRAYOS: Borramos el registro corrupto de Firestore
-            // Reemplaza esto con tu lógica exacta de guardado (ej. borrar documento o vaciarlo)
-            try {
-                console.log("[Firestore] Ejecutando purga total de la sesión corrupta...");
-                
-                // Usamos 'coleccionSesion' y 'db' que ya están definidos globalmente en tu index.js
-                const snapshot = await coleccionSesion.get();
-                
-                if (!snapshot.empty) {
-                    const batch = db.batch(); // Preparamos un borrado masivo
-                    snapshot.docs.forEach((doc) => {
-                        batch.delete(doc.ref);
-                    });
-                    
-                    await batch.commit(); // Ejecutamos el borrado de golpe
-                    console.log("[Firestore] Sesión antigua eliminada de la base de datos con éxito.");
-                } else {
-                    console.log("[Firestore] La colección ya estaba limpia.");
-                }
-            } catch (fsError) {
-                console.error("[Firestore] Error al intentar borrar la sesión corrupta:", fsError.message);
+                try {
+                    const snapshot = await db.collection('usuarios').doc(uid).collection('whatsapp_session').get();
+                    if (!snapshot.empty) {
+                        const batch = db.batch();
+                        snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+                        await batch.commit();
+                    }
+                } catch (fsError) {}
+
+                setTimeout(() => connectToWhatsApp(uid), 4000);
+                return;
             }
 
-            console.log("[TrueWin] Inicializando flujo limpio desde cero en 4 segundos...");
-            setTimeout(() => connectToWhatsApp(), 4000);
-            return;
-        }
-
-            // 🚀 CORRECCIÓN: Destrucción Total ante Baneo (403)
-            if (codigoError === 403 || codigoError === DisconnectReason.forbidden) {
-                console.error("[🚨 ALERTA 403] Servidores de Meta rechazaron autenticación (Posible Baneo). DETENIENDO.");
-                io.emit('estado-conexion', 'desconectado'); 
-                whatsappSock = null; 
-                
-                cacheCreds = {}; 
-                cacheKeys = {}; 
-                cacheCargada = false;
+            if (codigoError === 403 || codigoError === DisconnectReason.forbidden || codigoError === DisconnectReason.loggedOut) {
+                io.to(uid).emit('estado-conexion', 'desconectado'); 
+                sesionesActivas.delete(uid);
+                cacheCriptografica.set(uid, { creds: {}, keys: {}, cargada: false });
                 return; 
             }
 
-            // 🚀 CORRECCIÓN: Destrucción Total ante Desvinculación de Dispositivo
-            if (codigoError === DisconnectReason.loggedOut) {
-                console.error("[🚨 Sesión Cerrada] Usuario desvinculó el bot desde el celular. Deteniendo reconexión.");
-                io.emit('estado-conexion', 'desconectado'); 
-                whatsappSock = null; 
-                
-                cacheCreds = {}; 
-                cacheKeys = {}; 
-                cacheCargada = false;
-                return; 
-            }
-
-            console.log(`[TrueWin] Reiniciando flujo de forma limpia en 3 segundos (Código: ${codigoError})...`);
-            
-            if (whatsappSock) {
-                whatsappSock.ev.removeAllListeners();
-            }
-
-            setTimeout(() => connectToWhatsApp(), 3000); 
+            if (whatsappSock) whatsappSock.ev.removeAllListeners();
+            setTimeout(() => connectToWhatsApp(uid), 3000); 
         }
         
         if (connection === 'open') {
-            console.log('[TrueWin] ¡CONEXIÓN GLOBAL ESTABLECIDA CON ÉXITO EN WHATSAPP!');
-            ultimoQR = null; 
-            io.emit('estado-conexion', 'conectado'); 
+            console.log(`[TrueWin] ¡CONEXIÓN ESTABLECIDA PARA UID: ${uid}!`);
+            qrActivos.delete(uid); 
+            io.to(uid).emit('estado-conexion', 'conectado'); 
         }
     });
 
@@ -561,26 +510,41 @@ whatsappSock.ev.on('creds.update', saveCreds);
 }
 
 io.on('connection', (socket) => {
-    console.log('[Socket.IO] ¡Nueva pestaña del CRM sincronizada al túnel en tiempo real!');
-    
-    if (whatsappSock && whatsappSock.user) {
-        socket.emit('estado-conexion', 'conectado');
-    } else if (ultimoQR) {
-        socket.emit('estado-conexion', 'desconectado');
-        socket.emit('qr-update', ultimoQR);
-    } else {
-        socket.emit('estado-conexion', 'desconectado');
-    }
+    console.log('[Socket.IO] Un cliente se ha conectado al túnel en tiempo real.');
 
-    socket.on('crm-presencia', async ({ numero, estado }) => {
-        if (!whatsappSock) return;
+    // 🚀 EL DISPARADOR MAESTRO: Se activa cuando el Frontend nos manda el UID
+    socket.on('autenticar', async (uid) => {
+        if (!uid) return;
+        
+        console.log(`[Socket.IO] Autenticando sala privada para el UID: ${uid}`);
+        socket.join(uid); // Aislamos a este usuario en su propio cuarto
+
+        // Si este usuario NO tiene su WhatsApp iniciado en nuestra RAM, lo encendemos
+        if (!sesionesActivas.has(uid)) {
+            await connectToWhatsApp(uid);
+        } else {
+            // Si ya estaba encendido (ej. recargó la página), le avisamos cómo está su conexión
+            const whatsappSockLocal = sesionesActivas.get(uid);
+            if (whatsappSockLocal && whatsappSockLocal.user) {
+                socket.emit('estado-conexion', 'conectado');
+            } else if (qrActivos.has(uid)) {
+                socket.emit('estado-conexion', 'desconectado');
+                socket.emit('qr-update', qrActivos.get(uid));
+            }
+        }
+    });
+
+    socket.on('crm-presencia', async ({ numero, estado, uid }) => {
+        if (!uid) return;
+        const whatsappSockLocal = sesionesActivas.get(uid);
+        if (!whatsappSockLocal) return;
+        
         try {
             const jid = formatearJid(numero);
-            await whatsappSock.sendPresenceUpdate(estado, jid);
+            await whatsappSockLocal.sendPresenceUpdate(estado, jid);
         } catch (e) {}
     });
 });
-
 // =========================================================================
 // 4. ENDPOINTS DE CONTROL (BLINDADOS ANTI-BANEO Y SOPORTE DE GRUPOS / LIDS)
 // =========================================================================
@@ -668,15 +632,14 @@ app.post('/send-text', async (req, res) => {
         
         // 🚀 4. EMISIÓN PRIVADA CON EL PAYLOAD ORIGINAL INTACTO
         io.to(uid).emit('nuevo-mensaje', { 
-            numero: jidReal, 
-            nombre: "TrueWin", 
-            texto: mensajeFinal, 
+            numero: identificador, 
+            nombre: nombrePerfil, 
+            texto: texto, 
             hora: new Date().toISOString(),
-            timestamp: Date.now(),
-            remitente: null,
-            mediaUrl: null,
-            mediaType: null,
-            tipo: 'out'
+            remitente: remitenteEspecifico,
+            mediaUrl: mediaUrl,
+            mediaType: mediaType,
+            tipo: tipoMensaje 
         });
 
         res.json({ success: true });
@@ -1331,7 +1294,9 @@ async function despacharFlujoDesdeNube(numeroDestino, tpl) {
 // =========================================================================
 async function iniciarEcosistema() {
     try {
-        await connectToWhatsApp();
+        // 🚀 ELIMINADO: await connectToWhatsApp(); 
+        // (Ya no iniciamos a ciegas, esperamos a que el usuario se conecte y nos dé su UID)
+        
         httpServer.listen(PORT, () => {
             console.log(`[TrueWin-Web] 🚀 API y WebSockets listos y escuchando en el puerto ${PORT}`);
         });
