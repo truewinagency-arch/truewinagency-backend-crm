@@ -1,7 +1,8 @@
-const cors = require('cors');
-app.use(cors({ origin: true, credentials: true }));
 const express = require('express');
-const app = express();
+const cors = require('cors');
+
+const app = express(); // 🚀 1. Primero creamos 'app'
+app.use(cors({ origin: true, credentials: true }));
 
 // 1. Requerir multer y el módulo 'fs'
 const multer = require('multer');
