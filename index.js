@@ -1,7 +1,16 @@
-const express = require('express');
 const cors = require('cors');
-const fs = require('fs'); // Asegúrate de tener 'fs' importado
+const express = require('express');
+const app = express();
+
+// 1. Requerir multer y el módulo 'fs'
 const multer = require('multer');
+const fs = require('fs');
+
+// 2. Asegurarnos de que exista la carpeta temporal 'uploads/'
+if (!fs.existsSync('uploads')) {
+    fs.mkdirSync('uploads');
+}
+const upload = multer({ dest: 'uploads/' });
 const pino = require('pino');
 const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON, Browsers } = require('@whiskeysockets/baileys');
 const { createServer } = require('http');
