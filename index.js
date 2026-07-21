@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs'); // Asegúrate de tener 'fs' importado
+const multer = require('multer');
 const pino = require('pino');
 const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON, Browsers } = require('@whiskeysockets/baileys');
 const { createServer } = require('http');
