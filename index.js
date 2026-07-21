@@ -620,7 +620,6 @@ app.post('/send-text', async (req, res) => {
         const jidReal = formatearJid(numero);
 
         if (linkData && linkData.url) {
-            // Nota: Luego adaptaremos enviarTarjetaEnlace para que reciba 'whatsappSockLocal'
             await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal);
         } else {
             const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
@@ -636,19 +635,18 @@ app.post('/send-text', async (req, res) => {
             }
         }
 
-        // Nota: Luego adaptaremos guardarMensajeBD para que reciba el 'uid'
         await guardarMensajeBD(uid, numero, "TrueWin", mensajeFinal, 'out');
         
-        // 🚀 4. EMISIÓN PRIVADA CON EL PAYLOAD ORIGINAL INTACTO
+        // 🚀 4. EMISIÓN PRIVADA CORREGIDA (con las variables existentes)
         io.to(uid).emit('nuevo-mensaje', { 
-            numero: identificador, 
-            nombre: nombrePerfil, 
-            texto: texto, 
+            numero: numero, 
+            nombre: "TrueWin", 
+            texto: mensajeFinal, 
             hora: new Date().toISOString(),
-            remitente: remitenteEspecifico,
-            mediaUrl: mediaUrl,
-            mediaType: mediaType,
-            tipo: tipoMensaje 
+            remitente: null,
+            mediaUrl: null,
+            mediaType: null,
+            tipo: 'out' 
         });
 
         res.json({ success: true });
