@@ -155,8 +155,16 @@ const idsEnviadosPorBot = new Set();
 // 3. CONEXIÓN A WHATSAPP CON CACHÉ EN RAM + LOTES EN FIRESTORE
 // =========================================================================
 async function connectToWhatsApp(email) {
+    // 🛡️ DOBLE VALIDACIÓN: Si llega vacío hasta aquí, abortamos antes de tocar Firebase
+    if (!email || typeof email !== 'string' || email.trim() === '') {
+        console.error(`[TrueWin-Backend] 🛑 ERROR FATAL EVITADO: connectToWhatsApp recibió un email vacío.`);
+        return;
+    }
+    
+    email = email.trim();
     console.log(`[TrueWin-Backend] Sincronizando sesión para: ${email}...`);
 
+    // Si pasamos la barrera de arriba, esta línea ya NUNCA dará error
     const coleccionSesionUsuario = getColeccionSesion(email);
 
     if (!cacheCriptografica.has(email)) {
@@ -443,8 +451,17 @@ async function connectToWhatsApp(email) {
 // =========================================================================
 
 io.on('connection', (socket) => {
-    socket.on('autenticar', async (email) => {
-        if (!email) return;
+    socket.on('autenticar', async (data) => {
+        // 1. Extraemos el email (por si el frontend envía un string o un objeto {email: "..."})
+        let email = typeof data === 'string' ? data : data?.email || data?.uid;
+
+        // 2. Validación estricta: Si está vacío, no es string, o son puros espacios, lo bloqueamos
+        if (!email || typeof email !== 'string' || email.trim() === '') {
+            console.error(`[Socket.IO] 🛑 Intento de autenticación rechazado: Email inválido o vacío. Dato recibido:`, data);
+            return; // Detenemos aquí para evitar que el servidor se caiga
+        }
+
+        email = email.trim(); // Limpiamos espacios accidentales
         
         console.log(`[Socket.IO] Autenticando sala privada para el email: ${email}`);
         socket.join(email); 
@@ -469,17 +486,19 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('crm-presencia', async ({ numero, estado, email }) => {
+    socket.on('crm-presencia', async (data) => {
+        // También protegemos este evento por si acaso
+        let email = typeof data.email === 'string' ? data.email.trim() : null;
         if (!email) return;
+
         const whatsappSockLocal = sesionesActivas.get(email);
         if (!whatsappSockLocal) return;
         try {
-            const jid = formatearJid(numero);
-            await whatsappSockLocal.sendPresenceUpdate(estado, jid);
+            const jid = formatearJid(data.numero);
+            await whatsappSockLocal.sendPresenceUpdate(data.estado, jid);
         } catch (e) {}
     });
 });
-
 // =========================================================================
 // 🚀 ENDPOINTS BASE & CRM CONTACTOS
 // =========================================================================
