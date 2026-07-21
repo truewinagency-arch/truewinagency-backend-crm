@@ -143,7 +143,8 @@ app.use(express.json());
 
 const sesionesActivas = new Map(); 
 const qrActivos = new Map();
-const cacheCriptografica = new Map(); // Para aislar el problema del mensaje fantasma por usuario
+const cacheCriptografica = new Map();
+const inicializandoSesiones = new Set(); // 🚀 NUEVO ESCUDO ANTI-BUCLES
 let ultimosMensajesKey = {};
 
 // 🚀 VARIABLES GLOBALES DE CACHÉ CRIPTOGRÁFICO (El parche del mensaje fantasma)
@@ -512,18 +513,15 @@ whatsappSock.ev.on('creds.update', saveCreds);
 io.on('connection', (socket) => {
     console.log('[Socket.IO] Un cliente se ha conectado al túnel en tiempo real.');
 
-    // 🚀 EL DISPARADOR MAESTRO: Se activa cuando el Frontend nos manda el UID
+    // 🚀 EL DISPARADOR MAESTRO BLINDADO
     socket.on('autenticar', async (uid) => {
         if (!uid) return;
         
         console.log(`[Socket.IO] Autenticando sala privada para el UID: ${uid}`);
-        socket.join(uid); // Aislamos a este usuario en su propio cuarto
+        socket.join(uid); 
 
-        // Si este usuario NO tiene su WhatsApp iniciado en nuestra RAM, lo encendemos
-        if (!sesionesActivas.has(uid)) {
-            await connectToWhatsApp(uid);
-        } else {
-            // Si ya estaba encendido (ej. recargó la página), le avisamos cómo está su conexión
+        // 🚀 ESCUDO: Si ya está encendido O está en proceso de encenderse, lo frenamos
+        if (sesionesActivas.has(uid) || inicializandoSesiones.has(uid)) {
             const whatsappSockLocal = sesionesActivas.get(uid);
             if (whatsappSockLocal && whatsappSockLocal.user) {
                 socket.emit('estado-conexion', 'conectado');
@@ -531,6 +529,17 @@ io.on('connection', (socket) => {
                 socket.emit('estado-conexion', 'desconectado');
                 socket.emit('qr-update', qrActivos.get(uid));
             }
+            return; // Evitamos que se creen múltiples instancias
+        }
+
+        // Bloqueamos la puerta para que nadie más inicie sesión al mismo tiempo
+        inicializandoSesiones.add(uid);
+        
+        try {
+            await connectToWhatsApp(uid);
+        } finally {
+            // Liberamos la puerta una vez termine el proceso
+            inicializandoSesiones.delete(uid);
         }
     });
 
@@ -538,7 +547,6 @@ io.on('connection', (socket) => {
         if (!uid) return;
         const whatsappSockLocal = sesionesActivas.get(uid);
         if (!whatsappSockLocal) return;
-        
         try {
             const jid = formatearJid(numero);
             await whatsappSockLocal.sendPresenceUpdate(estado, jid);
@@ -549,11 +557,17 @@ io.on('connection', (socket) => {
 // 4. ENDPOINTS DE CONTROL (BLINDADOS ANTI-BANEO Y SOPORTE DE GRUPOS / LIDS)
 // =========================================================================
 app.get('/status', (req, res) => {
-    if (whatsappSock && whatsappSock.user) {
-        return res.json({ status: "connected", user: whatsappSock.user });
+    const { uid } = req.query;
+    if (!uid) return res.status(401).json({ status: "disconnected" });
+    
+    const sock = sesionesActivas.get(uid);
+    if (sock && sock.user) {
+        return res.json({ status: "connected", user: sock.user });
     }
-    res.json({ status: "disconnected", qr: ultimoQR });
+    res.json({ status: "disconnected", qr: qrActivos.get(uid) });
 });
+
+
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -748,20 +762,18 @@ app.post('/send-audio', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 🚀 ENDPOINT CORREGIDO Y BLINDADO: Carga el historial en milisegundos sin congelarse
+
 app.get('/api/historial', async (req, res) => {
     try {
-        const hostActivo = getHostNumber();
-        if (hostActivo === 'desconectado') {
-            return res.json({ historial: {}, nombres: {} }); 
-        }
+        const { uid } = req.query; // 🚀 Recibimos quién pregunta
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
 
-        const snapshot = await db.collection('crm_mensajes').where('host', '==', hostActivo).get();
+        // Buscamos solo en la bóveda de este UID
+        const snapshot = await db.collection('usuarios').doc(uid).collection('crm_mensajes').orderBy('timestamp', 'asc').get();
+        
         let todosLosMensajes = [];
         snapshot.forEach(doc => todosLosMensajes.push(doc.data()));
         
-        todosLosMensajes.sort((a, b) => a.timestamp - b.timestamp);
-
         const historial = {};
         const nombres = {};
         
@@ -771,30 +783,24 @@ app.get('/api/historial', async (req, res) => {
             let chatArray = historial[data.numero];
             let ultimoMensaje = chatArray.length > 0 ? chatArray[chatArray.length - 1] : null;
 
-            // 🌟 LÓGICA DE COLLAGE:
-            // Si el último mensaje es del mismo tipo (in/out), es una imagen,
-            // el mensaje actual también es imagen, y se enviaron con menos de 60 segundos de diferencia...
+            // 🌟 LÓGICA DE COLLAGE
             if (
                 ultimoMensaje && 
                 ultimoMensaje.tipo === data.tipo &&
                 ultimoMensaje.mediaType === 'image' && 
                 data.mediaType === 'image' &&
-                (data.timestamp - ultimoMensaje.timestamp) < 60000 // 60 segundos
+                (data.timestamp - ultimoMensaje.timestamp) < 60000 
             ) {
-                // Transformamos el mensaje anterior en un Collage (Array de URLs)
                 if (!ultimoMensaje.esCollage) {
                     ultimoMensaje.esCollage = true;
                     ultimoMensaje.mediaUrls = [ultimoMensaje.mediaUrl];
                 }
-                // Añadimos la nueva imagen al paquete
                 ultimoMensaje.mediaUrls.push(data.mediaUrl);
                 
-                // Concatenamos el texto si hay varios pies de foto (opcional)
                 if (data.texto && data.texto !== "[Archivo o mensaje interactivo]") {
                     ultimoMensaje.texto = ultimoMensaje.texto + "\n" + data.texto;
                 }
             } else {
-                // Es un mensaje normal, lo añadimos directamente
                 chatArray.push({ 
                     tipo: data.tipo, 
                     texto: data.texto, 
