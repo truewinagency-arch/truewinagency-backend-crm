@@ -6,11 +6,11 @@ const app = express();
 const multer = require('multer');
 const fs = require('fs');
 
-// 2. Asegurarnos de que exista la carpeta temporal 'uploads/'
 if (!fs.existsSync('uploads')) {
     fs.mkdirSync('uploads');
 }
 const upload = multer({ dest: 'uploads/' });
+
 const pino = require('pino');
 const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON, Browsers } = require('@whiskeysockets/baileys');
 const { createServer } = require('http');
@@ -20,16 +20,14 @@ const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore'); 
 const serviceAccount = require('./firebase-credentials.json');
 
-
-
 // =========================================================================
-// 0. DETECTORES DE ERRORES CRÍTICOS (Anti-colapsos silenciosos)
+// 0. DETECTORES DE ERRORES CRÍTICOS
 // =========================================================================
 process.on('uncaughtException', (err) => console.error('\n[NODE FATAL] Excepción no capturada:', err));
 process.on('unhandledRejection', (reason, promise) => console.error('\n[NODE FATAL] Promesa rechazada no manejada:', reason));
 
 // =========================================================================
-// 1. INICIALIZACIÓN DE FIREBASE CON CONFIGURACIÓN DE TOLERANCIA
+// 1. INICIALIZACIÓN DE FIREBASE Y FUNCIONES HELPER (user_profiles + email)
 // =========================================================================
 initializeApp({
     credential: cert(serviceAccount)
@@ -37,32 +35,25 @@ initializeApp({
 
 const db = getFirestore();
 db.settings({ ignoreUndefinedProperties: true });
-const getColeccionSesion = (uid) => db.collection('user_profiles').doc(uid).collection('crm_whatsapp_session');
-const getColeccionMensajes = (uid) => db.collection('user_profiles').doc(uid).collection('crm_mensajes');
-const getColeccionPlantillas = (uid) => db.collection('user_profiles').doc(uid).collection('crm_plantillas');
-const getColeccionContactos = (uid) => db.collection('user_profiles').doc(uid).collection('crm_contactos');
+
+// 🚀 HELPER FUNCTIONS APUNTANDO A 'user_profiles' Y AL EMAIL
+const getColeccionSesion = (email) => db.collection('user_profiles').doc(email).collection('crm_whatsapp_session');
+const getColeccionMensajes = (email) => db.collection('user_profiles').doc(email).collection('crm_mensajes');
+const getColeccionPlantillas = (email) => db.collection('user_profiles').doc(email).collection('crm_plantillas');
+const getColeccionContactos = (email) => db.collection('user_profiles').doc(email).collection('crm_contactos');
 
 const Jimp = require('jimp');
 const sharp = require('sharp');
-// 🚀 DETECTOR DEL NÚMERO CONECTADO ACTUALMENTE AL SERVIDOR
-function getHostNumber() {
-    if (whatsappSock && whatsappSock.user && whatsappSock.user.id) {
-        // Baileys guarda el número así: "584121234567:1@s.whatsapp.net". Esto lo limpia.
-        return whatsappSock.user.id.split(':')[0].split('@')[0]; 
-    }
-    return 'desconectado';
-}
 
-// 🚀 FUNCIÓN MAESTRA: Guarda cada disparo con soporte multimedia integral
-async function guardarMensajeBD(uid, numero, nombre, texto, tipo, remitente = null, mediaUrl = null, mediaType = null) {
+// 🚀 GUARDAR MENSAJE EN BASE DE DATOS
+async function guardarMensajeBD(email, numero, nombre, texto, tipo, remitente = null, mediaUrl = null, mediaType = null) {
     try {
-        if (!uid) {
-            console.error("Error: Se intentó guardar un mensaje sin proporcionar el UID.");
+        if (!email) {
+            console.error("Error: Se intentó guardar un mensaje sin proporcionar el email del usuario.");
             return; 
         }
 
-        // 🌟 Guardamos en la subcolección privada del UID: usuarios/{uid}/crm_mensajes
-        await getColeccionMensajes(uid).add({
+        await getColeccionMensajes(email).add({
             numero: numero,
             nombre: nombre || "Desconocido",
             texto: texto,
@@ -74,17 +65,16 @@ async function guardarMensajeBD(uid, numero, nombre, texto, tipo, remitente = nu
             timestamp: Date.now() 
         });
     } catch (error) {
-        console.error(`Error guardando mensaje en historial aislado para el usuario ${uid}:`, error);
+        console.error(`Error guardando mensaje en historial para el usuario ${email}:`, error);
     }
 }
 
-// 🚀 GESTOR DE CONTACTOS: Guarda, nombra y extrae metadatos de Grupos/Comunidades
-// 🚀 GESTOR DE CONTACTOS AISLADO
-async function registrarContactoInteligente(uid, jid, pushName, esGrupo, whatsappSockLocal) {
+// 🚀 REGISTRAR CONTACTO INTELIGENTE
+async function registrarContactoInteligente(email, jid, pushName, esGrupo, whatsappSockLocal) {
     if (!whatsappSockLocal || jid.includes('status@broadcast')) return;
 
     try {
-        const docRef = db.collection('usuarios').doc(uid).collection('crm_contactos').doc(jid);
+        const docRef = getColeccionContactos(email).doc(jid);
         const doc = await docRef.get();
 
         if (doc.exists) {
@@ -118,7 +108,6 @@ async function registrarContactoInteligente(uid, jid, pushName, esGrupo, whatsap
     } catch (error) {}
 }
 
-// 🚀 ENRUTADOR INTELIGENTE: Detecta si es un Grupo, un @lid o Persona normal sin romper formatos
 function formatearJid(numero) {
     const numStr = numero.toString();
     if (numStr.includes('@g.us')) return numStr; 
@@ -129,7 +118,6 @@ function formatearJid(numero) {
 // =========================================================================
 // 2. CONFIGURACIÓN DEL SERVIDOR HTTP Y WEBSOCKETS
 // =========================================================================
-
 const PORT = process.env.PORT || 3000; 
 
 const httpServer = createServer(app);
@@ -159,31 +147,22 @@ app.use(express.json());
 const sesionesActivas = new Map(); 
 const qrActivos = new Map();
 const cacheCriptografica = new Map();
-const inicializandoSesiones = new Set(); // 🚀 NUEVO ESCUDO ANTI-BUCLES
+const inicializandoSesiones = new Set();
 let ultimosMensajesKey = {};
-
-// 🚀 VARIABLES GLOBALES DE CACHÉ CRIPTOGRÁFICO (El parche del mensaje fantasma)
-// Al estar aquí afuera, sobreviven a los reinicios del socket (Código 515)
-let cacheCreds = {};
-let cacheKeys = {};
-let cacheCargada = false;;
-
 const idsEnviadosPorBot = new Set();
 
 // =========================================================================
 // 3. CONEXIÓN A WHATSAPP CON CACHÉ EN RAM + LOTES EN FIRESTORE
 // =========================================================================
-async function connectToWhatsApp(uid) {
-    console.log(`[TrueWin-Backend] Sincronizando e inicializando sesión para el UID: ${uid}...`);
+async function connectToWhatsApp(email) {
+    console.log(`[TrueWin-Backend] Sincronizando sesión para: ${email}...`);
 
-    // 1. Aislamiento de Base de Datos: Cada usuario tiene su propia bóveda de llaves
-    const coleccionSesionUsuario = db.collection('usuarios').doc(uid).collection('whatsapp_session');
+    const coleccionSesionUsuario = getColeccionSesion(email);
 
-    // 2. Aislamiento de RAM: Inicializamos el espacio de este usuario en el diccionario de caché
-    if (!cacheCriptografica.has(uid)) {
-        cacheCriptografica.set(uid, { creds: {}, keys: {}, cargada: false });
+    if (!cacheCriptografica.has(email)) {
+        cacheCriptografica.set(email, { creds: {}, keys: {}, cargada: false });
     }
-    let cacheLocal = cacheCriptografica.get(uid);
+    let cacheLocal = cacheCriptografica.get(email);
 
     const readState = async () => {
         if (cacheLocal.cargada) {
@@ -228,13 +207,13 @@ async function connectToWhatsApp(uid) {
 
     const { state, saveCreds } = {
         state: {
-            creds: cacheLocal.creds, // 🚀 1. Usamos la memoria RAM específica de este usuario
+            creds: cacheLocal.creds,
             keys: {
                 get: async (type, ids) => {
                     const data = {};
                     for (const id of ids) {
                         const docId = `${type}-${id}`;
-                        data[id] = cacheLocal.keys[docId]; // 🚀 2. Leemos las llaves del usuario
+                        data[id] = cacheLocal.keys[docId];
                     }
                     return data;
                 },
@@ -249,7 +228,6 @@ async function connectToWhatsApp(uid) {
                             
                             if (docId.includes('lid-mapping')) continue; 
 
-                            // 🚀 3. Apuntamos a la Bóveda Privada en Firestore de ESTE usuario
                             const docRef = coleccionSesionUsuario.doc(docId); 
                             
                             if (value) {
@@ -281,17 +259,13 @@ async function connectToWhatsApp(uid) {
         }
     };
 
-    // =========================================================================
-    // 🚀 EXTRACCIÓN DE VERSIÓN OFICIAL Y CONFIGURACIÓN DEL SOCKET
-    // =========================================================================
-    const { fetchLatestWaWebVersion, Browsers } = require('@whiskeysockets/baileys');
+    const { fetchLatestWaWebVersion } = require('@whiskeysockets/baileys');
     let versionWaWeb = [2, 3000, 1015901307];
     try {
         const { version } = await fetchLatestWaWebVersion();
         versionWaWeb = version;
     } catch (e) { }
 
-    // 🚀 INICIALIZACIÓN DEL SOCKET AISLADO
     const whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
@@ -301,18 +275,13 @@ async function connectToWhatsApp(uid) {
         logger: pino({ level: 'silent' }) 
     });
 
-    // 🌟 EL PASO MAESTRO: Guardamos el teléfono de este usuario en nuestro diccionario global
-    sesionesActivas.set(uid, whatsappSock);
-    // =========================================================================
-    // 🚀 INTERCEPTOR MAESTRO DE ENVÍOS (El aniquilador de duplicados)
-    // Atrapa cualquier cosa que el bot envíe y guarda su ID en la memoria temporal.
-    // =========================================================================
+    sesionesActivas.set(email, whatsappSock);
+
     const sendMessageOriginal = whatsappSock.sendMessage.bind(whatsappSock);
     whatsappSock.sendMessage = async (jid, content, options) => {
         const msgEnviado = await sendMessageOriginal(jid, content, options);
         if (msgEnviado && msgEnviado.key && msgEnviado.key.id) {
             idsEnviadosPorBot.add(msgEnviado.key.id);
-            // Limpieza inteligente para no saturar la RAM de tu servidor
             if (idsEnviadosPorBot.size > 500) {
                 idsEnviadosPorBot.delete(idsEnviadosPorBot.values().next().value);
             }
@@ -320,16 +289,15 @@ async function connectToWhatsApp(uid) {
         return msgEnviado;
     };
 
-    const { DisconnectReason } = require('@whiskeysockets/baileys');
     const { Boom } = require('@hapi/boom'); 
 
- whatsappSock.ev.on('connection.update', async (update) => {
+    whatsappSock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update; 
         
         if (qr) {
-            console.log(`[TrueWin] Nuevo código QR para el UID: ${uid}`);
-            qrActivos.set(uid, qr); // Guardamos su QR en el diccionario global
-            io.to(uid).emit('qr-update', qr); // Emitimos SOLO a su sala privada
+            console.log(`[TrueWin] Nuevo QR para el usuario: ${email}`);
+            qrActivos.set(email, qr);
+            io.to(email).emit('qr-update', qr); 
         }
 
         if (connection === 'close') {
@@ -337,12 +305,12 @@ async function connectToWhatsApp(uid) {
             const codigoError = errorBoom ? errorBoom.output?.statusCode : (lastDisconnect?.error?.output?.statusCode || 500);
             
             if (codigoError === 405 || codigoError === 401) {
-                io.to(uid).emit('estado-conexion', 'desconectado'); 
-                sesionesActivas.delete(uid); // Sacamos del mapa
-                cacheCriptografica.set(uid, { creds: {}, keys: {}, cargada: false });
+                io.to(email).emit('estado-conexion', 'desconectado'); 
+                sesionesActivas.delete(email);
+                cacheCriptografica.set(email, { creds: {}, keys: {}, cargada: false });
 
                 try {
-                    const snapshot = await db.collection('usuarios').doc(uid).collection('whatsapp_session').get();
+                    const snapshot = await coleccionSesionUsuario.get();
                     if (!snapshot.empty) {
                         const batch = db.batch();
                         snapshot.docs.forEach((doc) => batch.delete(doc.ref));
@@ -350,216 +318,160 @@ async function connectToWhatsApp(uid) {
                     }
                 } catch (fsError) {}
 
-                setTimeout(() => connectToWhatsApp(uid), 4000);
+                setTimeout(() => connectToWhatsApp(email), 4000);
                 return;
             }
 
             if (codigoError === 403 || codigoError === DisconnectReason.forbidden || codigoError === DisconnectReason.loggedOut) {
-                io.to(uid).emit('estado-conexion', 'desconectado'); 
-                sesionesActivas.delete(uid);
-                cacheCriptografica.set(uid, { creds: {}, keys: {}, cargada: false });
+                io.to(email).emit('estado-conexion', 'desconectado'); 
+                sesionesActivas.delete(email);
+                cacheCriptografica.set(email, { creds: {}, keys: {}, cargada: false });
                 return; 
             }
 
             if (whatsappSock) whatsappSock.ev.removeAllListeners();
-            setTimeout(() => connectToWhatsApp(uid), 3000); 
+            setTimeout(() => connectToWhatsApp(email), 3000); 
         }
         
         if (connection === 'open') {
-            console.log(`[TrueWin] ¡CONEXIÓN ESTABLECIDA PARA UID: ${uid}!`);
-            qrActivos.delete(uid); 
-            io.to(uid).emit('estado-conexion', 'conectado'); 
+            console.log(`[TrueWin] ¡CONEXIÓN ESTABLECIDA PARA: ${email}!`);
+            qrActivos.delete(email); 
+            io.to(email).emit('estado-conexion', 'conectado'); 
         }
     });
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
-    const msg = m.messages[0];
+        const msg = m.messages[0];
 
-    // 🚀 ESCUDO ANTI-ECO: Si el mensaje lo envió este mismo servidor, lo ignoramos.
-    // Ya fue guardado y dibujado por la función que lo disparó originalmente.
-    if (msg.key.fromMe && msg.key.id && idsEnviadosPorBot.has(msg.key.id)) {
-        return;
-    }
+        if (msg.key.fromMe && msg.key.id && idsEnviadosPorBot.has(msg.key.id)) return;
+        if (!msg.message || msg.key.remoteJid === 'status@broadcast' || msg.key.remoteJid.includes('@newsletter')) return;
 
-    // Dejamos pasar todo lo demás (Mensajes del cliente y Mensajes enviados desde tu celular físico)
-    if (!msg.message || msg.key.remoteJid === 'status@broadcast' || msg.key.remoteJid.includes('@newsletter')) {
-        return;
-    }
+        const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
+        const messageType = Object.keys(msg.message || {})[0];
 
-    const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
+        if (['protocolMessage', 'pollUpdateMessage', 'pollCreationMessage', 'reactionMessage', 'senderKeyDistributionMessage'].includes(messageType)) return;
 
-    // EXTRAEMOS EL TIPO DE MENSAJE AL INICIO PARA LOS FILTROS
-    const messageType = Object.keys(msg.message || {})[0];
+        const tiempoActualUnix = Math.floor(Date.now() / 1000);
+        if (msg.messageTimestamp && (tiempoActualUnix - msg.messageTimestamp) > 60) return;
 
-    // Muro de contención para eventos de sistema.
-    if (
-        messageType === 'protocolMessage' || 
-        messageType === 'pollUpdateMessage' || 
-        messageType === 'pollCreationMessage' ||
-        messageType === 'reactionMessage' ||
-        messageType === 'senderKeyDistributionMessage'
-    ) {
-        return; 
-    }
+        const remoteJid = msg.key.remoteJid;
+        const esGrupo = remoteJid.endsWith('@g.us');
+        let nombrePerfil = msg.pushName || (esGrupo ? "Grupo de WhatsApp" : "Usuario"); 
+        let remitenteEspecifico = esGrupo ? (msg.pushName || msg.key.participant?.split('@')[0] || "Miembro") : null; 
 
-    // Filtra y destruye la sincronización histórica masiva
-    const tiempoActualUnix = Math.floor(Date.now() / 1000);
-    if (msg.messageTimestamp && (tiempoActualUnix - msg.messageTimestamp) > 60) {
-        console.log(`[Sincronización] Ignorando mensaje antiguo del JID: ${msg.key.remoteJid}`);
-        return;
-    }
-
-    const remoteJid = msg.key.remoteJid;
-    const esGrupo = remoteJid.endsWith('@g.us');
-    let nombrePerfil = msg.pushName || (esGrupo ? "Grupo de WhatsApp" : "Usuario"); 
-    let remitenteEspecifico = null; 
-
-    if (esGrupo) {
-        remitenteEspecifico = msg.pushName || msg.key.participant?.split('@')[0] || "Miembro";
-    }
-
-    // 🚀 CLAVE: Forzamos al servidor a esperar que el contacto/grupo se registre y asiente su nombre real en la cuenta del usuario
-    await registrarContactoInteligente(uid, remoteJid, msg.pushName, esGrupo);
-    
-    // Buscamos si ya guardamos un nombre personalizado o real para este JID en Firestore (Aislando por UID)
-    try {
-        const contactoDoc = await getColeccionContactos(uid).doc(remoteJid).get();
-        if (contactoDoc.exists) {
-            const cData = contactoDoc.data();
-            nombrePerfil = cData.nombrePersonalizado || cData.nombreOriginal || nombrePerfil;
-        }
-    } catch (e) {
-        console.warn(`[Backend - UID: ${uid}] No se pudo cruzar el nombre en caliente:`, e.message);
-    }
-    
-    const identificador = remoteJid;
-    
-    // 🚀 Solo guardamos la llave para el "visto azul automático" si el mensaje es del cliente
-    if (tipoMensaje === 'in') {
-        // Aseguramos que la estructura exista para el usuario
-        if (!ultimosMensajesKey[uid]) ultimosMensajesKey[uid] = {};
-        ultimosMensajesKey[uid][identificador] = msg.key;
-    }
-    
-    // MOTOR DE TRADUCCIÓN MULTIMEDIA ENTRANTE
-    let texto = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
-    let mediaUrl = null;
-    let mediaType = null;
-
-    if (messageType === 'imageMessage') {
-        mediaType = 'image';
-        texto = msg.message.imageMessage.caption || ""; 
-    } else if (messageType === 'videoMessage') {
-        mediaType = 'video';
-        texto = msg.message.videoMessage.caption || ""; 
-    } else if (messageType === 'audioMessage') {
-        mediaType = 'audio';
-        texto = ""; 
-    } else if (!texto) {
-        texto = "[Archivo o mensaje interactivo]";
-    }
-
-    if (mediaType) {
+        await registrarContactoInteligente(email, remoteJid, msg.pushName, esGrupo, whatsappSock);
+        
         try {
-            const { downloadMediaMessage } = require('@whiskeysockets/baileys');
-            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { 
-                logger: pino({ level: 'error' }) 
-            });
-            
-            if (buffer) {
-                const crypto = require('crypto');
-                const token = crypto.randomUUID(); 
-                let extension = 'bin';
-                let contentType = 'application/octet-stream';
-                
-                if (mediaType === 'image') { extension = 'png'; contentType = 'image/png'; }
-                else if (mediaType === 'video') { extension = 'mp4'; contentType = 'video/mp4'; }
-                else if (mediaType === 'audio') { extension = 'ogg'; contentType = 'audio/ogg; codecs=opus'; }
-
-                // Aislar por subcarpeta del UID en Firebase Storage
-                const nombreArchivo = `crm_incoming/${uid}/${identificador.replace(/[^a-zA-Z0-9]/g, '')}_${Date.now()}.${extension}`;
-                const { getStorage } = require('firebase-admin/storage');
-                const bucket = getStorage().bucket('truezone-agency.firebasestorage.app');
-                const archivoBlob = bucket.file(nombreArchivo);
-                
-                await archivoBlob.save(buffer, {
-                    metadata: {
-                        metadata: { firebaseStorageDownloadTokens: token }
-                    },
-                    contentType: contentType
-                });
-                
-                mediaUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(nombreArchivo)}?alt=media&token=${token}`;
+            const contactoDoc = await getColeccionContactos(email).doc(remoteJid).get();
+            if (contactoDoc.exists) {
+                const cData = contactoDoc.data();
+                nombrePerfil = cData.nombrePersonalizado || cData.nombreOriginal || nombrePerfil;
             }
-        } catch (err) {
-            console.error(`[UID: ${uid}] Error procesando multimedia de WhatsApp:`, err);
+        } catch (e) {}
+        
+        const identificador = remoteJid;
+        
+        if (tipoMensaje === 'in') {
+            if (!ultimosMensajesKey[email]) ultimosMensajesKey[email] = {};
+            ultimosMensajesKey[email][identificador] = msg.key;
         }
-    }
-    
-    // 🚀 GUARDADO DINÁMICO: Pasamos la variable 'tipoMensaje' ('in' u 'out') a la base de datos
-    await guardarMensajeBD(uid, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType);
+        
+        let texto = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
+        let mediaUrl = null;
+        let mediaType = null;
 
-    // 🚀 PROTECCIÓN DEL BOT
-    if (tipoMensaje === 'in') {
-        const whatsappSockLocal = sesionesActivas.get(uid);
-        if (whatsappSockLocal) {
-            procesarBotEnNube(uid, identificador, texto, whatsappSockLocal);
+        if (messageType === 'imageMessage') {
+            mediaType = 'image';
+            texto = msg.message.imageMessage.caption || ""; 
+        } else if (messageType === 'videoMessage') {
+            mediaType = 'video';
+            texto = msg.message.videoMessage.caption || ""; 
+        } else if (messageType === 'audioMessage') {
+            mediaType = 'audio';
+            texto = ""; 
+        } else if (!texto) {
+            texto = "[Archivo o mensaje interactivo]";
         }
-    }
 
-    // 🚀 EMISIÓN PRIVADA AL FRONTEND
-    io.to(uid).emit('nuevo-mensaje', { 
-        numero: identificador, 
-        nombre: nombrePerfil, 
-        texto: texto, 
-        hora: new Date().toISOString(),
-        remitente: remitenteEspecifico,
-        mediaUrl: mediaUrl,
-        mediaType: mediaType,
-        tipo: tipoMensaje
+        if (mediaType) {
+            try {
+                const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+                const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                
+                if (buffer) {
+                    const crypto = require('crypto');
+                    const token = crypto.randomUUID(); 
+                    let extension = mediaType === 'image' ? 'png' : (mediaType === 'video' ? 'mp4' : 'ogg');
+                    let contentType = mediaType === 'image' ? 'image/png' : (mediaType === 'video' ? 'video/mp4' : 'audio/ogg; codecs=opus');
+
+                    const nombreArchivo = `crm_incoming/${email}/${identificador.replace(/[^a-zA-Z0-9]/g, '')}_${Date.now()}.${extension}`;
+                    const { getStorage } = require('firebase-admin/storage');
+                    const bucket = getStorage().bucket('truezone-agency.firebasestorage.app');
+                    const archivoBlob = bucket.file(nombreArchivo);
+                    
+                    await archivoBlob.save(buffer, {
+                        metadata: { metadata: { firebaseStorageDownloadTokens: token } },
+                        contentType: contentType
+                    });
+                    
+                    mediaUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(nombreArchivo)}?alt=media&token=${token}`;
+                }
+            } catch (err) {
+                console.error(`[Email: ${email}] Error procesando multimedia:`, err);
+            }
+        }
+        
+        await guardarMensajeBD(email, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType);
+
+        io.to(email).emit('nuevo-mensaje', { 
+            numero: identificador, 
+            nombre: nombrePerfil, 
+            texto: texto, 
+            hora: new Date().toISOString(),
+            remitente: remitenteEspecifico,
+            mediaUrl: mediaUrl,
+            mediaType: mediaType,
+            tipo: tipoMensaje
+        });
     });
-});
- 
 
-whatsappSock.ev.on('creds.update', saveCreds);
+    whatsappSock.ev.on('creds.update', saveCreds);
 }
 
+// =========================================================================
+// 🔌 SOCKET.IO - EVENTOS DE CONEXIÓN Y PRESENCIA
+// =========================================================================
+
 io.on('connection', (socket) => {
-    console.log('[Socket.IO] Un cliente se ha conectado al túnel en tiempo real.');
-
-    // 🚀 EL DISPARADOR MAESTRO BLINDADO
-    socket.on('autenticar', async (uid) => {
-        if (!uid) return;
+    socket.on('autenticar', async (email) => {
+        if (!email) return;
         
-        console.log(`[Socket.IO] Autenticando sala privada para el UID: ${uid}`);
-        socket.join(uid); 
+        console.log(`[Socket.IO] Autenticando sala privada para el email: ${email}`);
+        socket.join(email); 
 
-        // 🚀 ESCUDO: Si ya está encendido O está en proceso de encenderse, lo frenamos
-        if (sesionesActivas.has(uid) || inicializandoSesiones.has(uid)) {
-            const whatsappSockLocal = sesionesActivas.get(uid);
+        if (sesionesActivas.has(email) || inicializandoSesiones.has(email)) {
+            const whatsappSockLocal = sesionesActivas.get(email);
             if (whatsappSockLocal && whatsappSockLocal.user) {
                 socket.emit('estado-conexion', 'conectado');
-            } else if (qrActivos.has(uid)) {
+            } else if (qrActivos.has(email)) {
                 socket.emit('estado-conexion', 'desconectado');
-                socket.emit('qr-update', qrActivos.get(uid));
+                socket.emit('qr-update', qrActivos.get(email));
             }
-            return; // Evitamos que se creen múltiples instancias
+            return;
         }
 
-        // Bloqueamos la puerta para que nadie más inicie sesión al mismo tiempo
-        inicializandoSesiones.add(uid);
+        inicializandoSesiones.add(email);
         
         try {
-            await connectToWhatsApp(uid);
+            await connectToWhatsApp(email);
         } finally {
-            // Liberamos la puerta una vez termine el proceso
-            inicializandoSesiones.delete(uid);
+            inicializandoSesiones.delete(email);
         }
     });
 
-    socket.on('crm-presencia', async ({ numero, estado, uid }) => {
-        if (!uid) return;
-        const whatsappSockLocal = sesionesActivas.get(uid);
+    socket.on('crm-presencia', async ({ numero, estado, email }) => {
+        if (!email) return;
+        const whatsappSockLocal = sesionesActivas.get(email);
         if (!whatsappSockLocal) return;
         try {
             const jid = formatearJid(numero);
@@ -567,35 +479,28 @@ io.on('connection', (socket) => {
         } catch (e) {}
     });
 });
+
 // =========================================================================
-// 4. ENDPOINTS DE CONTROL (BLINDADOS ANTI-BANEO Y SOPORTE DE GRUPOS / LIDS)
+// 🚀 ENDPOINTS BASE & CRM CONTACTOS
 // =========================================================================
+
 app.get('/status', (req, res) => {
-    const { uid } = req.query;
-    if (!uid) return res.status(401).json({ status: "disconnected" });
+    const email = req.query.email || req.query.uid;
+    if (!email) return res.status(401).json({ status: "disconnected" });
     
-    const sock = sesionesActivas.get(uid);
+    const sock = sesionesActivas.get(email);
     if (sock && sock.user) {
         return res.json({ status: "connected", user: sock.user });
     }
-    res.json({ status: "disconnected", qr: qrActivos.get(uid) });
+    res.json({ status: "disconnected", qr: qrActivos.get(email) });
 });
-
-
-
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-
-// =========================================================================
-// 🚀 ENDPOINTS DE GESTIÓN DE CONTACTOS Y COMUNIDADES
-// =========================================================================
 
 app.get('/api/contactos', async (req, res) => {
     try {
-        const { uid } = req.query;
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const email = req.query.email || req.query.uid;
+        if (!email) return res.status(401).json({ error: "Falta email" });
 
-        const snapshot = await db.collection('usuarios').doc(uid).collection('crm_contactos').orderBy('ultimaActividad', 'desc').get();
+        const snapshot = await getColeccionContactos(email).orderBy('ultimaActividad', 'desc').get();
         let contactos = [];
         snapshot.forEach(doc => contactos.push(doc.data()));
         res.json(contactos);
@@ -607,10 +512,11 @@ app.get('/api/contactos', async (req, res) => {
 app.put('/api/contactos/:jid', async (req, res) => {
     try {
         const { jid } = req.params;
-        const { nombrePersonalizado, uid } = req.body;
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const email = req.body.email || req.body.uid;
+        const { nombrePersonalizado } = req.body;
+        if (!email) return res.status(401).json({ error: "Falta email" });
         
-        await db.collection('usuarios').doc(uid).collection('crm_contactos').doc(jid).update({
+        await getColeccionContactos(email).doc(jid).update({
             nombrePersonalizado: nombrePersonalizado
         });
         
@@ -620,22 +526,26 @@ app.put('/api/contactos/:jid', async (req, res) => {
     }
 });
 
-// =====================================================================
-// 🌐 ENDPOINT MANUAL: BANNER HD CRISTALINO (SIN CDN - RECTÁNGULO PURO)
-// =====================================================================
-app.post('/send-text', async (req, res) => {
-    // 🚀 1. Recibimos el 'uid' del frontend
-    const { uid, numero, mensaje, linkData } = req.body; 
-    
-    // 🚀 2. Extraemos el "teléfono" específico de este usuario
-    const whatsappSockLocal = sesionesActivas.get(uid);
+// =========================================================================
+// 💬 ENDPOINTS DE ENVÍO MANUALE DE MENSAJES
+// =========================================================================
 
+// --- ENVIAR TEXTO ---
+app.post('/send-text', async (req, res) => {
+    const email = req.body.email || req.body.uid;
+    const { numero, mensaje, linkData } = req.body; 
+    
+    if (!email) {
+        return res.status(400).json({ error: "Falta el parámetro email." });
+    }
+
+    const whatsappSockLocal = sesionesActivas.get(email);
     if (!whatsappSockLocal) {
-        return res.status(401).json({ error: "Tu sesión de WhatsApp no está activa o el QR no ha sido escaneado." });
+        return res.status(401).json({ error: "Tu sesión de WhatsApp no está activa." });
     }
 
     try {
-        const mensajeFinal = procesarSpintax(mensaje);
+        const mensajeFinal = typeof procesarSpintax === 'function' ? procesarSpintax(mensaje) : mensaje;
         const jidReal = formatearJid(numero);
 
         if (linkData && linkData.url) {
@@ -649,19 +559,18 @@ app.post('/send-text', async (req, res) => {
                 const linkDataInfo = await extraerMetadatos(linkDetectado);
                 await enviarTarjetaEnlace(jidReal, mensajeFinal, linkDataInfo, whatsappSockLocal);
             } else {
-                // 🚀 3. Usamos la instancia aislada del usuario
                 await whatsappSockLocal.sendMessage(jidReal, { text: mensajeFinal });
             }
         }
 
-        await guardarMensajeBD(uid, numero, "TrueWin", mensajeFinal, 'out');
+        await guardarMensajeBD(email, numero, "TrueWin", mensajeFinal, 'out');
         
-        // 🚀 4. EMISIÓN PRIVADA CORREGIDA (con las variables existentes)
-        io.to(uid).emit('nuevo-mensaje', { 
+        io.to(email).emit('nuevo-mensaje', { 
             numero: numero, 
             nombre: "TrueWin", 
             texto: mensajeFinal, 
             hora: new Date().toISOString(),
+            timestamp: Date.now(),
             remitente: null,
             mediaUrl: null,
             mediaType: null,
@@ -671,194 +580,185 @@ app.post('/send-text', async (req, res) => {
         res.json({ success: true });
     } catch (error) {
         console.error("Fallo al enviar texto manual:", error);
-        res.status(500).json({ error: "Fallo al enviar texto" });
+        res.status(500).json({ error: "Fallo al enviar texto: " + error.message });
     }
 });
 
+// --- ENVIAR IMAGEN ---
 app.post('/send-image', upload.single('file'), async (req, res) => {
     try {
-        const { number, caption, uid } = req.body;
+        const email = req.body.email || req.body.uid;
+        const { number, caption } = req.body;
 
-        if (!uid) {
-            return res.status(400).json({ success: false, message: 'Falta el parámetro uid.' });
+        if (!email) {
+            return res.status(400).json({ success: false, message: 'Falta el parámetro email.' });
         }
 
-        const whatsappSockLocal = sesionesActivas.get(uid);
+        const whatsappSockLocal = sesionesActivas.get(email);
         if (!whatsappSockLocal) {
-            return res.status(500).json({ success: false, message: `Instancia de WhatsApp no conectada para el usuario ${uid}` });
+            return res.status(500).json({ success: false, message: `Instancia no conectada para ${email}` });
         }
 
         if (!number || !req.file) {
-            return res.status(400).json({ success: false, message: 'Número y archivo de imagen son requeridos.' });
+            return res.status(400).json({ success: false, message: 'Número y archivo requeridos.' });
         }
 
-        const formattedNumber = `${number}@s.whatsapp.net`;
+        const formattedNumber = formatearJid(number);
         const filePath = req.file.path;
 
-        // Enviar imagen usando la instancia del usuario
-        const sentMessage = await whatsappSockLocal.sendMessage(formattedNumber, {
+        await whatsappSockLocal.sendMessage(formattedNumber, {
             image: { url: filePath },
             caption: caption || ''
         });
 
-        // Eliminar el archivo temporal
         if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
         }
 
-        const timestamp = new Date();
+        const textoMensaje = caption || '[Imagen]';
+        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, null, 'image');
+
+        // Payload estandarizado para Socket.IO
         const responseData = {
-            id: sentMessage.key.id,
-            from: 'me',
-            to: number,
-            text: caption || '[Imagen]',
-            mediaUrl: sentMessage.message?.imageMessage?.url || '',
-            type: 'image',
-            timestamp: timestamp,
-            status: 'sent'
+            numero: number,
+            nombre: "TrueWin",
+            texto: textoMensaje,
+            hora: new Date().toISOString(),
+            timestamp: Date.now(),
+            remitente: null,
+            mediaUrl: null, 
+            mediaType: 'image',
+            tipo: 'out'
         };
 
-        // Guardar mensaje en la subcolección del usuario
-        await guardarMensajeBD(uid, formattedNumber, responseData);
-
-        // Emitir Socket solo a la sala del usuario
-        io.to(uid).emit('nuevoMensaje', responseData);
-
+        io.to(email).emit('nuevo-mensaje', responseData);
         res.json({ success: true, message: 'Imagen enviada con éxito.', data: responseData });
     } catch (error) {
         console.error('Error al enviar la imagen:', error);
-        res.status(500).json({ success: false, message: 'Error al enviar la imagen: ' + error.message });
+        res.status(500).json({ success: false, message: 'Error al enviar imagen: ' + error.message });
     }
 });
 
-// ==========================================
-// ENDPOINT: ENVIAR VIDEO
-// ==========================================
+// --- ENVIAR VIDEO ---
 app.post('/send-video', upload.single('file'), async (req, res) => {
     try {
-        const { number, caption, uid } = req.body;
+        const email = req.body.email || req.body.uid;
+        const { number, caption } = req.body;
 
-        if (!uid) {
-            return res.status(400).json({ success: false, message: 'Falta el parámetro uid.' });
+        if (!email) {
+            return res.status(400).json({ success: false, message: 'Falta el parámetro email.' });
         }
 
-        const whatsappSockLocal = sesionesActivas.get(uid);
+        const whatsappSockLocal = sesionesActivas.get(email);
         if (!whatsappSockLocal) {
-            return res.status(500).json({ success: false, message: `Instancia de WhatsApp no conectada para el usuario ${uid}` });
+            return res.status(500).json({ success: false, message: `Instancia no conectada para ${email}` });
         }
 
         if (!number || !req.file) {
-            return res.status(400).json({ success: false, message: 'Número y archivo de video son requeridos.' });
+            return res.status(400).json({ success: false, message: 'Número y video requeridos.' });
         }
 
-        const formattedNumber = `${number}@s.whatsapp.net`;
+        const formattedNumber = formatearJid(number);
         const filePath = req.file.path;
 
-        // Enviar video usando la instancia del usuario
-        const sentMessage = await whatsappSockLocal.sendMessage(formattedNumber, {
+        await whatsappSockLocal.sendMessage(formattedNumber, {
             video: { url: filePath },
             caption: caption || '',
             mimetype: req.file.mimetype
         });
 
-        // Eliminar el archivo temporal
         if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
         }
 
-        const timestamp = new Date();
+        const textoMensaje = caption || '[Video]';
+        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, null, 'video');
+
         const responseData = {
-            id: sentMessage.key.id,
-            from: 'me',
-            to: number,
-            text: caption || '[Video]',
-            mediaUrl: sentMessage.message?.videoMessage?.url || '',
-            type: 'video',
-            timestamp: timestamp,
-            status: 'sent'
+            numero: number,
+            nombre: "TrueWin",
+            texto: textoMensaje,
+            hora: new Date().toISOString(),
+            timestamp: Date.now(),
+            remitente: null,
+            mediaUrl: null,
+            mediaType: 'video',
+            tipo: 'out'
         };
 
-        // Guardar mensaje en la subcolección del usuario
-        await guardarMensajeBD(uid, formattedNumber, responseData);
-
-        // Emitir Socket solo a la sala del usuario
-        io.to(uid).emit('nuevoMensaje', responseData);
-
+        io.to(email).emit('nuevo-mensaje', responseData);
         res.json({ success: true, message: 'Video enviado con éxito.', data: responseData });
     } catch (error) {
         console.error('Error al enviar el video:', error);
-        res.status(500).json({ success: false, message: 'Error al enviar el video: ' + error.message });
+        res.status(500).json({ success: false, message: 'Error al enviar video: ' + error.message });
     }
 });
 
-// ==========================================
-// ENDPOINT: ENVIAR AUDIO / NOTA DE VOZ
-// ==========================================
+// --- ENVIAR AUDIO ---
 app.post('/send-audio', upload.single('file'), async (req, res) => {
     try {
-        const { number, uid } = req.body;
+        const email = req.body.email || req.body.uid;
+        const { number } = req.body;
 
-        if (!uid) {
-            return res.status(400).json({ success: false, message: 'Falta el parámetro uid.' });
+        if (!email) {
+            return res.status(400).json({ success: false, message: 'Falta el parámetro email.' });
         }
 
-        const whatsappSockLocal = sesionesActivas.get(uid);
+        const whatsappSockLocal = sesionesActivas.get(email);
         if (!whatsappSockLocal) {
-            return res.status(500).json({ success: false, message: `Instancia de WhatsApp no conectada para el usuario ${uid}` });
+            return res.status(500).json({ success: false, message: `Instancia no conectada para ${email}` });
         }
 
         if (!number || !req.file) {
-            return res.status(400).json({ success: false, message: 'Número y archivo de audio son requeridos.' });
+            return res.status(400).json({ success: false, message: 'Número y audio requeridos.' });
         }
 
-        const formattedNumber = `${number}@s.whatsapp.net`;
+        const formattedNumber = formatearJid(number);
         const filePath = req.file.path;
 
-        // Enviar audio como PTT (Push To Talk / Nota de voz)
-        const sentMessage = await whatsappSockLocal.sendMessage(formattedNumber, {
+        await whatsappSockLocal.sendMessage(formattedNumber, {
             audio: { url: filePath },
             mimetype: 'audio/mp4',
             ptt: true
         });
 
-        // Eliminar el archivo temporal
         if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
         }
 
-        const timestamp = new Date();
+        const textoMensaje = '[Nota de voz]';
+        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, null, 'audio');
+
         const responseData = {
-            id: sentMessage.key.id,
-            from: 'me',
-            to: number,
-            text: '[Nota de voz]',
-            mediaUrl: sentMessage.message?.audioMessage?.url || '',
-            type: 'audio',
-            timestamp: timestamp,
-            status: 'sent'
+            numero: number,
+            nombre: "TrueWin",
+            texto: textoMensaje,
+            hora: new Date().toISOString(),
+            timestamp: Date.now(),
+            remitente: null,
+            mediaUrl: null,
+            mediaType: 'audio',
+            tipo: 'out'
         };
 
-        // Guardar mensaje en la subcolección del usuario
-        await guardarMensajeBD(uid, formattedNumber, responseData);
-
-        // Emitir Socket solo a la sala del usuario
-        io.to(uid).emit('nuevoMensaje', responseData);
-
+        io.to(email).emit('nuevo-mensaje', responseData);
         res.json({ success: true, message: 'Audio enviado con éxito.', data: responseData });
     } catch (error) {
         console.error('Error al enviar el audio:', error);
-        res.status(500).json({ success: false, message: 'Error al enviar el audio: ' + error.message });
+        res.status(500).json({ success: false, message: 'Error al enviar audio: ' + error.message });
     }
 });
 
+// =========================================================================
+// 📜 HISTORIAL DE CONVERSACIONES
+// =========================================================================
 
 app.get('/api/historial', async (req, res) => {
     try {
-        const { uid } = req.query; // 🚀 Recibimos quién pregunta
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const email = req.query.email || req.query.uid; // Corregida lectura de email
+        if (!email) return res.status(401).json({ error: "Falta email" });
 
-        // Buscamos solo en la bóveda de este UID
-        const snapshot = await db.collection('usuarios').doc(uid).collection('crm_mensajes').orderBy('timestamp', 'asc').get();
+        const snapshot = await db.collection('user_profiles').doc(email).collection('crm_mensajes').orderBy('timestamp', 'asc').get();
         
         let todosLosMensajes = [];
         snapshot.forEach(doc => todosLosMensajes.push(doc.data()));
@@ -872,7 +772,7 @@ app.get('/api/historial', async (req, res) => {
             let chatArray = historial[data.numero];
             let ultimoMensaje = chatArray.length > 0 ? chatArray[chatArray.length - 1] : null;
 
-            // 🌟 LÓGICA DE COLLAGE
+            // Lógica de Collage para imágenes consecutivas
             if (
                 ultimoMensaje && 
                 ultimoMensaje.tipo === data.tipo &&
@@ -912,15 +812,21 @@ app.get('/api/historial', async (req, res) => {
     }
 });
 
-// 🚀 ENDPOINT: Activa el doble check azul en el teléfono del cliente
+// =====================================================================
+// 🚀 ENDPOINTS DE UTILIDAD Y SESIÓN
+// =====================================================================
+
+// Activa el doble check azul en el teléfono del cliente
 app.post('/api/marcar-visto', async (req, res) => {
-    const { numero, uid } = req.body;
-    const whatsappSockLocal = sesionesActivas.get(uid);
-    if (!whatsappSockLocal || !numero) return res.json({ success: false });
+    const { numero, email } = req.body;
+    if (!email || !numero) return res.status(400).json({ success: false, error: "Faltan parámetros" });
+
+    const whatsappSockLocal = sesionesActivas.get(email);
+    if (!whatsappSockLocal) return res.json({ success: false, message: "Sesión no encontrada" });
     
     try {
-        if (ultimosMensajesKey[uid] && ultimosMensajesKey[uid][numero]) {
-            await whatsappSockLocal.readMessages([ultimosMensajesKey[uid][numero]]);
+        if (ultimosMensajesKey[email] && ultimosMensajesKey[email][numero]) {
+            await whatsappSockLocal.readMessages([ultimosMensajesKey[email][numero]]);
             res.json({ success: true });
         } else {
             res.json({ success: true, message: "Sin mensajes pendientes en caché" });
@@ -930,10 +836,13 @@ app.post('/api/marcar-visto', async (req, res) => {
     }
 });
 
+// Obtiene la foto de perfil del contacto en WhatsApp
 app.get('/api/foto-perfil', async (req, res) => {
-    const { jid, uid } = req.query;
-    const whatsappSockLocal = sesionesActivas.get(uid);
-    if (!whatsappSockLocal || !jid) return res.json({ url: null });
+    const { jid, email } = req.query;
+    if (!email || !jid) return res.json({ url: null });
+
+    const whatsappSockLocal = sesionesActivas.get(email);
+    if (!whatsappSockLocal) return res.json({ url: null });
     
     try {
         await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 200) + 200));
@@ -950,10 +859,10 @@ app.get('/api/foto-perfil', async (req, res) => {
 
 app.get('/api/automatizaciones', async (req, res) => {
     try {
-        const { uid } = req.query;
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const { email } = req.query;
+        if (!email) return res.status(401).json({ error: "Falta email" });
 
-        const snapshot = await db.collection('usuarios').doc(uid).collection('crm_automatizaciones').get();
+        const snapshot = await db.collection('user_profiles').doc(email).collection('crm_automatizaciones').get();
         let autos = [];
         snapshot.forEach(doc => autos.push(doc.data()));
         res.json(autos);
@@ -965,10 +874,10 @@ app.get('/api/automatizaciones', async (req, res) => {
 app.post('/api/automatizaciones', async (req, res) => {
     try {
         const data = req.body;
-        const { uid } = data; // 🚀 El frontend debe inyectarlo en el JSON
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const { email } = data;
+        if (!email) return res.status(401).json({ error: "Falta email" });
 
-        await db.collection('usuarios').doc(uid).collection('crm_automatizaciones').doc(data.id).set(data);
+        await db.collection('user_profiles').doc(email).collection('crm_automatizaciones').doc(data.id).set(data);
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: "Fallo al guardar automatización" });
@@ -978,23 +887,22 @@ app.post('/api/automatizaciones', async (req, res) => {
 app.delete('/api/automatizaciones/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { uid } = req.query;
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const { email } = req.query;
+        if (!email) return res.status(401).json({ error: "Falta email" });
 
-        await db.collection('usuarios').doc(uid).collection('crm_automatizaciones').doc(id).delete();
+        await db.collection('user_profiles').doc(email).collection('crm_automatizaciones').doc(id).delete();
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: "Fallo al eliminar automatización" });
     }
 });
 
-
 app.get('/api/config/automatizaciones', async (req, res) => {
     try {
-        const { uid } = req.query;
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const { email } = req.query;
+        if (!email) return res.status(401).json({ error: "Falta email" });
 
-        const doc = await db.collection('usuarios').doc(uid).collection('crm_config').doc('automatizaciones').get();
+        const doc = await db.collection('user_profiles').doc(email).collection('crm_config').doc('automatizaciones').get();
         if (!doc.exists) {
             return res.json({ activo: false }); 
         }
@@ -1006,10 +914,10 @@ app.get('/api/config/automatizaciones', async (req, res) => {
 
 app.post('/api/config/automatizaciones', async (req, res) => {
     try {
-        const { activo, uid } = req.body;
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const { activo, email } = req.body;
+        if (!email) return res.status(401).json({ error: "Falta email" });
 
-        await db.collection('usuarios').doc(uid).collection('crm_config').doc('automatizaciones').set({ activo });
+        await db.collection('user_profiles').doc(email).collection('crm_config').doc('automatizaciones').set({ activo });
         res.json({ success: true });
     } catch (e) { 
         res.status(500).json({ error: e.message }); 
@@ -1017,40 +925,46 @@ app.post('/api/config/automatizaciones', async (req, res) => {
 });
 
 // =========================================================================
-// 5. GESTOR DE PLANTILLAS DINÁMICAS (SECUENCIAS) Y MULTIMEDIA
+// 📄 GESTOR DE PLANTILLAS DINÁMICAS (SECUENCIAS)
 // =========================================================================
+
 app.get('/api/plantillas', async (req, res) => {
     try {
-        const { uid } = req.query;
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const { email } = req.query;
+        if (!email) return res.status(401).json({ error: "Falta email" });
 
-        const snapshot = await db.collection('usuarios').doc(uid).collection('crm_plantillas').get();
+        const snapshot = await db.collection('user_profiles').doc(email).collection('crm_plantillas').get();
         const plantillas = [];
         snapshot.forEach(doc => plantillas.push({ id: doc.id, ...doc.data() }));
         res.json(plantillas);
-    } catch (error) { res.status(500).json({ error: "Fallo al obtener plantillas" }); }
+    } catch (error) { 
+        res.status(500).json({ error: "Fallo al obtener plantillas" }); 
+    }
 });
 
 app.post('/api/plantillas', async (req, res) => {
     try {
-        const { uid, id, nombre, secuencia } = req.body;
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const { email, id, nombre, secuencia } = req.body;
+        if (!email) return res.status(401).json({ error: "Falta email" });
 
-        await db.collection('usuarios').doc(uid).collection('crm_plantillas').doc(id).set({
-            nombre: nombre, secuencia: secuencia, timestamp: Date.now()
+        await db.collection('user_profiles').doc(email).collection('crm_plantillas').doc(id).set({
+            nombre: nombre, 
+            secuencia: secuencia, 
+            timestamp: Date.now()
         });
         res.json({ success: true, id: id });
-    } catch (error) { res.status(500).json({ error: "Fallo al guardar plantilla" }); }
+    } catch (error) { 
+        res.status(500).json({ error: "Fallo al guardar plantilla" }); 
+    }
 });
 
 app.delete('/api/plantillas/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { uid } = req.query; // 🚀 Atrapamos el UID que viene en la URL
-        if (!uid) return res.status(401).json({ error: "Falta UID" });
+        const { email } = req.query;
+        if (!email) return res.status(401).json({ error: "Falta email" });
 
-        // 🚀 Eliminamos el documento directamente de la bóveda del usuario
-        await db.collection('usuarios').doc(uid).collection('crm_plantillas').doc(id).delete();
+        await db.collection('user_profiles').doc(email).collection('crm_plantillas').doc(id).delete();
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: "Fallo al eliminar plantilla" });
@@ -1058,14 +972,38 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 });
 
 // =========================================================================
-// 🚀 FÁBRICA DE TARJETAS ORGÁNICAS (Resolución Nativa + Entrega Blindada)
+// 🛠️ FUNCIONES AUXILIARES DE PROCESAMIENTO Y RASTREO
 // =========================================================================
+
+async function extraerMetadatos(urlStr) {
+    try {
+        let urlFinal = urlStr.startsWith('http') ? urlStr : 'https://' + urlStr;
+        const res = await fetch(urlFinal, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        });
+        const html = await res.text();
+
+        const titleMatch = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i) || html.match(/<title>([^<]+)<\/title>/i);
+        const descMatch = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]+)"/i) || html.match(/<meta[^>]*name="description"[^>]*content="([^"]+)"/i);
+        const imgMatch = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/i);
+
+        return {
+            url: urlFinal,
+            title: titleMatch ? titleMatch[1] : "Enlace Oficial",
+            description: descMatch ? descMatch[1] : "",
+            imageUrl: imgMatch ? imgMatch[1] : null
+        };
+    } catch (e) {
+        console.warn("[Scraper] Fallo al leer la web:", e.message);
+        return { url: urlStr, title: "Visitar Enlace", description: "", imageUrl: null };
+    }
+}
+
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal) {
     let thumbnailBuffer = null;
     let finalWidth = 0;
     let finalHeight = 0;
 
-    // Estructuración del cuerpo del texto
     let textoVisible = mensajeFinal || "";
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
         textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
@@ -1073,20 +1011,15 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
 
     if (linkData && linkData.imageUrl) {
         try {
-            console.log(`[Tarjeta Orgánica] Analizando imagen por defecto: ${linkData.imageUrl}`);
             const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-            
             if (resImagen.ok) {
                 const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                 const sharp = require('sharp');
                 
-                // 1. 🌟 LECTURA DE METADATOS: Extraemos la resolución real por defecto de la imagen
                 const metadata = await sharp(originalBuffer).metadata();
                 let originalWidth = metadata.width || 800;
                 let originalHeight = metadata.height || 418;
                 
-                // 2. ESCALADO PROPORCIONAL INTELIGENTE (No deforma, no estira forzadamente)
-                // Si la imagen es gigante, la reducimos manteniendo su aspecto original exacto
                 if (originalWidth > 800) {
                     originalHeight = Math.round((800 / originalWidth) * originalHeight);
                     originalWidth = 800;
@@ -1096,15 +1029,11 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
                 finalHeight = originalHeight;
                 let calidad = 80;
 
-                // Renderizamos respetando el tamaño y proporciones nativas de la web
                 thumbnailBuffer = await sharp(originalBuffer)
                     .resize({ width: finalWidth, height: finalHeight, fit: 'inside' })
                     .jpeg({ quality: calidad })
                     .toBuffer();
 
-                // 3. 🛡️ FILTRO DE PESO STRICTO ANTI-BLOQUEO
-                // Mantener el búfer debajo de 40KB es lo que asegura que el servidor de Meta 
-                // no clasifique el paquete como corrupto y se lo entregue al receptor de inmediato.
                 while (thumbnailBuffer.length > 40000 && calidad > 10) {
                     calidad -= 5;
                     thumbnailBuffer = await sharp(originalBuffer)
@@ -1112,16 +1041,14 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
                         .jpeg({ quality: calidad })
                         .toBuffer();
                 }
-                console.log(`[Tarjeta Orgánica] Procesada con éxito a ${finalWidth}x${finalHeight}. Peso seguro: ${(thumbnailBuffer.length / 1024).toFixed(2)} KB.`);
             }
         } catch (e) {
-            console.warn("[Tarjeta Orgánica] Fallo al procesar proporciones nativas:", e.message);
+            console.warn("[Tarjeta Orgánica] Fallo al procesar proporciones:", e.message);
         }
     }
 
     const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
-    // 4. ENSAMBLAJE PROTOBUF PURO (100% idéntico al comportamiento humano)
     const payloadExtended = {
         text: textoVisible, 
         matchedText: linkData.url,
@@ -1131,33 +1058,31 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
     };
 
     if (thumbnailBuffer) {
-        // Inyectamos el Base64 limpio sin CDN intermediarios
         payloadExtended.jpegThumbnail = thumbnailBuffer;
-        
-        // Informamos a la aplicación receptora las dimensiones reales de tu imagen
         payloadExtended.thumbnailWidth = finalWidth;
         payloadExtended.thumbnailHeight = finalHeight;
     }
 
-    // Acoplamos el contenido usando la instancia local aislada del usuario
     const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
         extendedTextMessage: payloadExtended
     }, { userJid: whatsappSockLocal.user.id });
 
-    // Despachamos el paquete directamente al túnel de mensajes de ese usuario específico
     await whatsappSockLocal.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
-    console.log(`[Tarjeta Orgánica] Mensaje transmitido de forma segura al JID: ${jidReal}`);
 }
 
-async function procesarBotEnNube(uid, numeroCliente, textoMensaje, whatsappSockLocal) {
-    if (!textoMensaje || !whatsappSockLocal || !uid) return;
+// =========================================================================
+// 🤖 MOTOR DE EVALUACIÓN Y DESPACHO EN NUBE
+// =========================================================================
+
+async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSockLocal) {
+    if (!textoMensaje || !whatsappSockLocal || !email) return;
     const textoLimpio = textoMensaje.toLowerCase().trim();
 
     try {
-        const configDoc = await db.collection('usuarios').doc(uid).collection('crm_config').doc('automatizaciones').get();
+        const configDoc = await db.collection('user_profiles').doc(email).collection('crm_config').doc('automatizaciones').get();
         if (!configDoc.exists || !configDoc.data().activo) return;
 
-        const autosSnapshot = await db.collection('usuarios').doc(uid).collection('crm_automatizaciones').get();
+        const autosSnapshot = await db.collection('user_profiles').doc(email).collection('crm_automatizaciones').get();
         let automatizaciones = [];
         autosSnapshot.forEach(doc => automatizaciones.push(doc.data()));
 
@@ -1173,41 +1098,50 @@ async function procesarBotEnNube(uid, numeroCliente, textoMensaje, whatsappSockL
             if (haceMatch) {
                 if (auto.frecuencia === 'unica') {
                     const idLogUnico = `${auto.id}_${numeroCliente.replace(/[^a-zA-Z0-9]/g, '')}`;
-                    const registroDoc = await db.collection('usuarios').doc(uid).collection('crm_registro_bot').doc(idLogUnico).get();
+                    const registroDoc = await db.collection('user_profiles').doc(email).collection('crm_registro_bot').doc(idLogUnico).get();
                     
                     if (registroDoc.exists) break; 
                     
-                    await db.collection('usuarios').doc(uid).collection('crm_registro_bot').doc(idLogUnico).set({
-                        idAutomatizacion: auto.id, palabraClave: auto.palabraClave, numeroCliente: numeroCliente, ejecutadoEl: new Date().toISOString()
+                    await db.collection('user_profiles').doc(email).collection('crm_registro_bot').doc(idLogUnico).set({
+                        idAutomatizacion: auto.id, 
+                        palabraClave: auto.palabraClave, 
+                        numeroCliente: numeroCliente, 
+                        ejecutadoEl: new Date().toISOString()
                     });
                 }
 
                 const tiempoLecturaHumana = Math.floor(Math.random() * (3500 - 1500 + 1)) + 1500;
                 setTimeout(async () => {
-                    if (ultimosMensajesKey[uid] && ultimosMensajesKey[uid][numeroCliente]) {
-                        try { await whatsappSockLocal.readMessages([ultimosMensajesKey[uid][numeroCliente]]); } catch (e) { }
+                    if (ultimosMensajesKey[email] && ultimosMensajesKey[email][numeroCliente]) {
+                        try { 
+                            await whatsappSockLocal.readMessages([ultimosMensajesKey[email][numeroCliente]]); 
+                        } catch (e) { }
                     }
                 }, tiempoLecturaHumana);
 
-                const tplDoc = await db.collection('usuarios').doc(uid).collection('crm_plantillas').doc(auto.idPlantilla).get();
+                const tplDoc = await db.collection('user_profiles').doc(email).collection('crm_plantillas').doc(auto.idPlantilla).get();
                 if (!tplDoc.exists) break;
                 
-                despacharFlujoDesdeNube(uid, numeroCliente, tplDoc.data(), whatsappSockLocal);
+                despacharFlujoDesdeNube(email, numeroCliente, tplDoc.data(), whatsappSockLocal);
                 break; 
             }
         }
-    } catch (err) {}
+    } catch (err) {
+        console.error("Error procesando bot en nube:", err);
+    }
 }
 
-async function despacharFlujoDesdeNube(uid, numeroDestino, tpl, whatsappSockLocal) {
+async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLocal) {
     const pause = (ms) => new Promise(res => setTimeout(res, ms));
     try { await pause(Math.floor(Math.random() * (2200 - 1200 + 1)) + 1200); } catch (e) {}
 
     for (const msj of tpl.secuencia) {
         try {
-            let textoOriginal = msj.texto || ""; let mUrl = msj.url || null; let mType = null;
+            let textoOriginal = msj.texto || ""; 
+            let mUrl = msj.url || null; 
+            let mType = null;
             const jidReal = formatearJid(numeroDestino);
-            let textoBurbuja = msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace' ? procesarSpintax(textoOriginal) : textoOriginal;
+            let textoBurbuja = (msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace') ? procesarSpintax(textoOriginal) : textoOriginal;
 
             try {
                 if (msj.tipo === 'audio') {
@@ -1243,7 +1177,9 @@ async function despacharFlujoDesdeNube(uid, numeroDestino, tpl, whatsappSockLoca
                         mType = 'image';
                         await whatsappSockLocal.sendMessage(jidReal, { image: bufferMedia, caption: textoBurbuja || "[Imagen enviada]" });
                     }
-                } catch (error) { }
+                } catch (error) { 
+                    console.error("[Bot Nube] Error enviando archivo multimedia:", error);
+                }
             } else if (msj.tipo === 'audio' && msj.url) {
                 mType = 'audio';
                 await whatsappSockLocal.sendMessage(jidReal, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
@@ -1251,156 +1187,22 @@ async function despacharFlujoDesdeNube(uid, numeroDestino, tpl, whatsappSockLoca
 
             try { await whatsappSockLocal.sendPresenceUpdate('paused', numeroDestino); } catch (e) {}
 
-            await guardarMensajeBD(uid, numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
+            await guardarMensajeBD(email, numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
 
-            io.to(uid).emit('nuevo-mensaje', { 
-                numero: numeroDestino, nombre: "TrueWin", texto: textoBurbuja, 
-                hora: new Date().toISOString(), timestamp: Date.now(),
-                remitente: null, mediaUrl: mUrl, mediaType: mType, tipo: 'out' 
-            });
-
-            await pause(Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500);
-        } catch (e) {}
-    }
-}
-// =========================================================================
-// 🚀 RASTREADOR WEB (AUTO-METADATOS PARA EL CRM)
-// =========================================================================
-async function extraerMetadatos(urlStr) {
-    try {
-        let urlFinal = urlStr.startsWith('http') ? urlStr : 'https://' + urlStr;
-        
-        // Entramos a la web simulando ser un navegador Chrome de PC para que no nos bloqueen
-        const res = await fetch(urlFinal, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        });
-        const html = await res.text();
-
-        // Extraemos las etiquetas SEO oficiales
-        const titleMatch = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i) || html.match(/<title>([^<]+)<\/title>/i);
-        const descMatch = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]+)"/i) || html.match(/<meta[^>]*name="description"[^>]*content="([^"]+)"/i);
-        const imgMatch = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/i);
-
-        return {
-            url: urlFinal,
-            title: titleMatch ? titleMatch[1] : "Enlace Oficial",
-            description: descMatch ? descMatch[1] : "",
-            imageUrl: imgMatch ? imgMatch[1] : null
-        };
-    } catch (e) {
-        console.warn("[Scraper] Fallo al leer la web:", e.message);
-        return { url: urlStr, title: "Visitar Enlace", description: "", imageUrl: null };
-    }
-}
-
-// 🚀 DESPACHADOR ASÍNCRONO EN NUBE: Ejecuta secuencias con pausas humanas anti-ban
-async function despacharFlujoDesdeNube(numeroDestino, tpl) {
-    const pause = (ms) => new Promise(res => setTimeout(res, ms));
-    
-    try {
-        const tiempoLectura = Math.floor(Math.random() * (2200 - 1200 + 1)) + 1200; 
-        await pause(tiempoLectura);
-    } catch (e) {}
-
-    for (const msj of tpl.secuencia) {
-        try {
-            let textoOriginal = msj.texto || "";
-            let mUrl = msj.url || null;
-            let mType = null;
-            const jidReal = formatearJid(numeroDestino);
-
-            // Procesamiento Spintax
-            let textoBurbuja = msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace' ? procesarSpintax(textoOriginal) : textoOriginal;
-
-            // Telemetría humana...
-            try {
-                if (msj.tipo === 'audio') {
-                    await whatsappSock.sendPresenceUpdate('recording', numeroDestino);
-                    await pause(4000); 
-                } else {
-                    await whatsappSock.sendPresenceUpdate('composing', numeroDestino);
-                    const caracteres = textoBurbuja ? textoBurbuja.length : 20;
-                    let tiempoTipeo = (caracteres * Math.floor(Math.random() * (55 - 25 + 1)) + 25) + Math.floor(Math.random() * (800 - 300 + 1)) + 300;
-                    
-                    const limiteMinimo = Math.floor(Math.random() * (1900 - 1200 + 1)) + 1200; 
-                    const limiteMaximo = Math.floor(Math.random() * (6500 - 4800 + 1)) + 4800; 
-                    tiempoTipeo = Math.max(limiteMinimo, Math.min(tiempoTipeo, limiteMaximo));
-                    
-                    console.log(`[Anti-Ban] Simulando tipeo por ${(tiempoTipeo / 1000).toFixed(2)}s`);
-                    await pause(tiempoTipeo);
-                }
-            } catch (e) { }
-
-            // 🚀 DISPARO CORREGIDO: LECTURA EN RAM Y FORZADO DE FORMATO
-            if (msj.tipo === 'texto') {
-                const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
-                const urls = textoBurbuja.match(urlRegex);
-
-                if (urls && urls.length > 0) {
-                    const linkDataInfo = await extraerMetadatos(urls[0]);
-                    await enviarTarjetaEnlace(jidReal, textoBurbuja, linkDataInfo);
-                } else {
-                    await whatsappSock.sendMessage(jidReal, { text: textoBurbuja });
-                }
-            } else if (msj.tipo === 'media' && msj.url) {
-                try {
-                    console.log(`[Bot Nube] Descargando y analizando archivo: ${msj.url}`);
-                    
-                    // 1. Descargamos el archivo a la RAM del servidor (Súper rápido y no falla el stream)
-                    const resMedia = await fetch(msj.url);
-                    const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
-                    
-                    // 2. Leemos la etiqueta interna (ADN) directa desde Firebase Storage
-                    const contentType = resMedia.headers.get('content-type') || '';
-
-                    // 3. Ya no adivinamos. Si es video, forzamos el empaquetado de video.
-                    if (contentType.includes('video') || msj.url.toLowerCase().includes('.mp4') || msj.url.toLowerCase().includes('.mov')) {
-                        mType = 'video';
-                        if (!textoBurbuja) textoBurbuja = "[Video enviado]";
-                        
-                        // 🚀 OBLIGAMOS a Baileys y a Meta a procesarlo como Video MP4
-                        await whatsappSock.sendMessage(jidReal, { 
-                            video: bufferMedia, 
-                            caption: textoBurbuja, 
-                            mimetype: 'video/mp4' 
-                        });
-                    } else {
-                        mType = 'image';
-                        if (!textoBurbuja) textoBurbuja = "[Imagen enviada]";
-                        
-                        await whatsappSock.sendMessage(jidReal, { 
-                            image: bufferMedia, 
-                            caption: textoBurbuja 
-                        });
-                    }
-                } catch (error) {
-                    console.error("[Bot Nube] Error crítico procesando media:", error);
-                }
-            } else if (msj.tipo === 'audio' && msj.url) {
-                mType = 'audio';
-                if (!textoBurbuja) textoBurbuja = "[Nota de voz enviada]";
-                await whatsappSock.sendMessage(jidReal, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
-            }
-
-            try { await whatsappSock.sendPresenceUpdate('paused', numeroDestino); } catch (e) {}
-
-            await guardarMensajeBD(numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
-
-            io.emit('nuevo-mensaje', { 
+            // 🚀 EMISIÓN POR SALA PRIVADA IDENTIFICADA POR EMAIL
+            io.to(email).emit('nuevo-mensaje', { 
                 numero: numeroDestino, 
                 nombre: "TrueWin", 
                 texto: textoBurbuja, 
-                hora: new Date().toISOString(),
+                hora: new Date().toISOString(), 
                 timestamp: Date.now(),
-                remitente: null,
-                mediaUrl: mUrl,
-                mediaType: mType,
+                remitente: null, 
+                mediaUrl: mUrl, 
+                mediaType: mType, 
                 tipo: 'out' 
             });
 
-            const delayHumano = Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500;
-            await pause(delayHumano);
-            
+            await pause(Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500);
         } catch (e) {
             console.error("Error disparando pieza del bot en la nube:", e);
         }
