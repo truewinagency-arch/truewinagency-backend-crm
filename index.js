@@ -129,7 +129,7 @@ function formatearJid(numero) {
 // =========================================================================
 // 2. CONFIGURACIÓN DEL SERVIDOR HTTP Y WEBSOCKETS
 // =========================================================================
-const app = express();
+
 const PORT = process.env.PORT || 3000; 
 
 const httpServer = createServer(app);
