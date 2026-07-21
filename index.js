@@ -454,39 +454,37 @@ async function connectToWhatsApp(email) {
 
 io.on('connection', (socket) => {
     socket.on('autenticar', async (data) => {
-        // 1. Extraemos el email (por si el frontend envía un string o un objeto {email: "..."})
-        let email = typeof data === 'string' ? data : data?.email || data?.uid;
+    // Extrae email ya sea que venga como string directo o como objeto { email }
+    let email = typeof data === 'string' ? data : data?.email || data?.uid;
 
-        // 2. Validación estricta: Si está vacío, no es string, o son puros espacios, lo bloqueamos
-        if (!email || typeof email !== 'string' || email.trim() === '') {
-            console.error(`[Socket.IO] 🛑 Intento de autenticación rechazado: Email inválido o vacío. Dato recibido:`, data);
-            return; // Detenemos aquí para evitar que el servidor se caiga
+    if (!email || typeof email !== 'string' || email.trim() === '') {
+        console.error(`[Socket.IO] 🛑 Intento de autenticación rechazado: Email inválido.`);
+        return;
+    }
+
+    email = email.trim();
+    console.log(`[Socket.IO] Autenticando sala privada para el email: ${email}`);
+    socket.join(email); 
+
+    if (sesionesActivas.has(email) || inicializandoSesiones.has(email)) {
+        const whatsappSockLocal = sesionesActivas.get(email);
+        if (whatsappSockLocal && whatsappSockLocal.user) {
+            socket.emit('estado-conexion', 'conectado');
+        } else if (qrActivos.has(email)) {
+            socket.emit('estado-conexion', 'desconectado');
+            socket.emit('qr-update', qrActivos.get(email));
         }
+        return;
+    }
 
-        email = email.trim(); // Limpiamos espacios accidentales
-        
-        console.log(`[Socket.IO] Autenticando sala privada para el email: ${email}`);
-        socket.join(email); 
-
-        if (sesionesActivas.has(email) || inicializandoSesiones.has(email)) {
-            const whatsappSockLocal = sesionesActivas.get(email);
-            if (whatsappSockLocal && whatsappSockLocal.user) {
-                socket.emit('estado-conexion', 'conectado');
-            } else if (qrActivos.has(email)) {
-                socket.emit('estado-conexion', 'desconectado');
-                socket.emit('qr-update', qrActivos.get(email));
-            }
-            return;
-        }
-
-        inicializandoSesiones.add(email);
-        
-        try {
-            await connectToWhatsApp(email);
-        } finally {
-            inicializandoSesiones.delete(email);
-        }
-    });
+    inicializandoSesiones.add(email);
+    
+    try {
+        await connectToWhatsApp(email);
+    } finally {
+        inicializandoSesiones.delete(email);
+    }
+});
 
     socket.on('crm-presencia', async (data) => {
         // También protegemos este evento por si acaso
