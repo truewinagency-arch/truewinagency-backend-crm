@@ -42,82 +42,65 @@ function getHostNumber() {
 }
 
 // 🚀 FUNCIÓN MAESTRA: Guarda cada disparo con soporte multimedia integral
-async function guardarMensajeBD(numero, nombre, texto, tipo, remitente = null, mediaUrl = null, mediaType = null) {
+async function guardarMensajeBD(uid, numero, nombre, texto, tipo, remitente = null, mediaUrl = null, mediaType = null) {
     try {
-        const hostActual = getHostNumber(); 
-        if (hostActual === 'desconectado') return; 
+        if (!uid) return; 
 
-        await db.collection('crm_mensajes').add({
-            host: hostActual, 
+        // 🌟 MAGIA: Guardamos en la subcolección privada del UID
+        await db.collection('usuarios').doc(uid).collection('crm_mensajes').add({
             numero: numero,
             nombre: nombre || "Desconocido",
             texto: texto,
             tipo: tipo,
             remitente: remitente,
-            mediaUrl: mediaUrl,   // 🚀 NUEVO
-            mediaType: mediaType, // 🚀 NUEVO
+            mediaUrl: mediaUrl,
+            mediaType: mediaType,
             hora: new Date().toISOString(),
             timestamp: Date.now() 
         });
     } catch (error) {
-        console.error("Error guardando en historial:", error);
+        console.error("Error guardando en historial aislado:", error);
     }
 }
 
 // 🚀 GESTOR DE CONTACTOS: Guarda, nombra y extrae metadatos de Grupos/Comunidades
-async function registrarContactoInteligente(jid, pushName, esGrupo) {
-    if (!whatsappSock || jid.includes('status@broadcast')) return;
+// 🚀 GESTOR DE CONTACTOS AISLADO
+async function registrarContactoInteligente(uid, jid, pushName, esGrupo, whatsappSockLocal) {
+    if (!whatsappSockLocal || jid.includes('status@broadcast')) return;
 
     try {
-        const docRef = db.collection('crm_contactos').doc(jid);
+        const docRef = db.collection('usuarios').doc(uid).collection('crm_contactos').doc(jid);
         const doc = await docRef.get();
 
-        // Si ya existe en la base de datos, solo actualizamos su última actividad
         if (doc.exists) {
             await docRef.update({ ultimaActividad: Date.now() });
             return;
         }
 
-        // Si es un contacto nuevo, extraemos toda su identidad
         let nombreOficial = pushName || "Usuario Desconocido";
         let fotoUrl = null;
         let tipoEntidad = esGrupo ? 'grupo' : 'persona';
 
         if (esGrupo) {
             try {
-                // 🌟 MAGIA: Extraemos el nombre real del grupo y su descripción
-                const metadata = await whatsappSock.groupMetadata(jid);
+                const metadata = await whatsappSockLocal.groupMetadata(jid);
                 nombreOficial = metadata.subject || nombreOficial;
-                
-                // Detectamos si es un canal de avisos de comunidad (Announce)
-                if (metadata.announce) {
-                    tipoEntidad = 'comunidad_avisos';
-                }
-            } catch (e) {
-                console.warn(`[Contactos] No se pudo obtener metadata del grupo ${jid}`);
-            }
+                if (metadata.announce) tipoEntidad = 'comunidad_avisos';
+            } catch (e) { }
         }
 
-        // Intentamos sacar la foto de perfil en segundo plano
-        try {
-            fotoUrl = await whatsappSock.profilePictureUrl(jid, 'image');
-        } catch (e) { /* Si no tiene foto, se queda en null */ }
+        try { fotoUrl = await whatsappSockLocal.profilePictureUrl(jid, 'image'); } catch (e) { }
 
-        // Guardamos el perfil maestro en Firestore
         await docRef.set({
             jid: jid,
             nombreOriginal: nombreOficial,
-            nombrePersonalizado: "", // 🌟 Campo vacío listo para que lo edites en tu panel
+            nombrePersonalizado: "",
             tipo: tipoEntidad,
             fotoPerfil: fotoUrl,
             creadoEl: new Date().toISOString(),
             ultimaActividad: Date.now()
         });
-
-        console.log(`[Contactos] Nuevo perfil registrado: ${nombreOficial} (${tipoEntidad})`);
-    } catch (error) {
-        console.error("[Contactos] Error al registrar entidad:", error);
-    }
+    } catch (error) {}
 }
 
 // 🚀 ENRUTADOR INTELIGENTE: Detecta si es un Grupo, un @lid o Persona normal sin romper formatos
@@ -158,8 +141,9 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-let whatsappSock = null;
-let ultimoQR = null;
+const sesionesActivas = new Map(); 
+const qrActivos = new Map();
+const cacheCriptografica = new Map(); // Para aislar el problema del mensaje fantasma por usuario
 let ultimosMensajesKey = {};
 
 // 🚀 VARIABLES GLOBALES DE CACHÉ CRIPTOGRÁFICO (El parche del mensaje fantasma)
@@ -173,30 +157,35 @@ const idsEnviadosPorBot = new Set();
 // =========================================================================
 // 3. CONEXIÓN A WHATSAPP CON CACHÉ EN RAM + LOTES EN FIRESTORE
 // =========================================================================
-async function connectToWhatsApp() {
-    console.log("[TrueWin-Backend] Sincronizando e inicializando sesión remota...");
+async function connectToWhatsApp(uid) {
+    console.log(`[TrueWin-Backend] Sincronizando e inicializando sesión para el UID: ${uid}...`);
 
-    // 🚨 (Asegúrate de que aquí adentro YA NO ESTÉN let cacheCreds, let cacheKeys ni let cacheCargada)
+    // 1. Aislamiento de Base de Datos: Cada usuario tiene su propia bóveda de llaves
+    const coleccionSesionUsuario = db.collection('usuarios').doc(uid).collection('whatsapp_session');
+
+    // 2. Aislamiento de RAM: Inicializamos el espacio de este usuario en el diccionario de caché
+    if (!cacheCriptografica.has(uid)) {
+        cacheCriptografica.set(uid, { creds: {}, keys: {}, cargada: false });
+    }
+    let cacheLocal = cacheCriptografica.get(uid);
 
     const readState = async () => {
-        if (cacheCargada) {
-            console.log("[TrueWin] Usando memoria caché rápida (Ignorando base de datos)...");
-            return { creds: cacheCreds, keys: cacheKeys, tieneDatos: true };
+        if (cacheLocal.cargada) {
+            return { creds: cacheLocal.creds, keys: cacheLocal.keys, tieneDatos: true };
         }
         try {
-            console.log("[TrueWin-Optimizado] Descargando llaves desde Firestore por primera vez...");
-            const snapshot = await coleccionSesion.get();
+            const snapshot = await coleccionSesionUsuario.get();
             let tieneDatos = false; 
             
             snapshot.forEach(doc => {
                 tieneDatos = true;
                 const parsedData = JSON.parse(doc.data().payload, BufferJSON.reviver);
-                if (doc.id === 'creds') cacheCreds = parsedData;
-                else cacheKeys[doc.id] = parsedData;
+                if (doc.id === 'creds') cacheLocal.creds = parsedData;
+                else cacheLocal.keys[doc.id] = parsedData;
             });
 
-            if (tieneDatos) cacheCargada = true;
-            return { creds: cacheCreds, keys: cacheKeys, tieneDatos };
+            if (tieneDatos) cacheLocal.cargada = true;
+            return { creds: cacheLocal.creds, keys: cacheLocal.keys, tieneDatos };
         } catch (e) { 
             return { creds: {}, keys: {}, tieneDatos: false }; 
         }
@@ -204,31 +193,21 @@ async function connectToWhatsApp() {
 
     const writeState = async (data, id) => {
         try {
-            if (id === 'creds') cacheCreds = data;
-            else cacheKeys[id] = data;
+            if (id === 'creds') cacheLocal.creds = data;
+            else cacheLocal.keys[id] = data;
 
             const stringifiedData = JSON.stringify(data, BufferJSON.replacer);
-            await coleccionSesion.doc(id).set({ payload: stringifiedData });
-        } catch (e) { 
-            console.error("Error al escribir datos de sesión en la nube:", e); 
-        }
+            await coleccionSesionUsuario.doc(id).set({ payload: stringifiedData });
+        } catch (e) { }
     };
 
-   // =========================================================================
-    // 🚀 BLOQUE DE CREDENCIALES CORREGIDO (UNIFICADO Y ANTI-BUCLE 428)
-    // =========================================================================
     const sesionFirebase = await readState();
-
-    // Usamos directamente cacheCreds en lugar de la respuesta de Firebase para proteger la RAM
-    let credencialesActivas = cacheCreds; 
+    let credencialesActivas = cacheLocal.creds; 
     
     if (Object.keys(credencialesActivas).length === 0) {
-        console.log('[TrueWin] Memoria y DB limpias. Generando credenciales oficiales para pedir QR...');
         credencialesActivas = initAuthCreds();
-        cacheCreds = credencialesActivas;
-        
-        // 🌟 PIEZA MÁGICA: Evita que si hay un micro-corte 428, se borre la RAM y genere llaves infinitas
-        cacheCargada = true; 
+        cacheLocal.creds = credencialesActivas;
+        cacheLocal.cargada = true; 
     }
 
     const { state, saveCreds } = {
@@ -295,27 +274,24 @@ async function connectToWhatsApp() {
     // 🚀 EXTRACCIÓN DE VERSIÓN OFICIAL Y CONFIGURACIÓN DEL SOCKET
     // =========================================================================
     const { fetchLatestWaWebVersion, Browsers } = require('@whiskeysockets/baileys');
-    let versionWaWeb = [2, 3000, 1015901307]; // Versión de respaldo estática
-    
+    let versionWaWeb = [2, 3000, 1015901307];
     try {
-        // Obtenemos la última versión de los servidores de Meta para evitar el Error 405
-        const { version, isLatest } = await fetchLatestWaWebVersion();
+        const { version } = await fetchLatestWaWebVersion();
         versionWaWeb = version;
-        console.log(`[TrueWin] Conectando con versión WA Web oficial: ${version.join('.')} (¿Es la última?: ${isLatest})`);
-    } catch (vError) {
-        console.warn("[TrueWin] No se pudo obtener la versión en vivo de Meta, usando respaldo seguro.");
-    }
+    } catch (e) { }
 
-    whatsappSock = makeWASocket({
+    // 🚀 INICIALIZACIÓN DEL SOCKET AISLADO
+    const whatsappSock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        version: versionWaWeb, // 🌟 CLAVE: Le dice a Meta que somos un cliente moderno actualizado
-        browser: Browsers.ubuntu('Chrome'), // 🌟 CLAVE: Nos camufla como un navegador Linux legítimo
-        getMessage: async (key) => {
-            return undefined;
-        },
+        version: versionWaWeb, 
+        browser: Browsers.ubuntu('Chrome'), 
+        getMessage: async (key) => undefined,
         logger: pino({ level: 'silent' }) 
     });
+
+    // 🌟 EL PASO MAESTRO: Guardamos el teléfono de este usuario en nuestro diccionario global
+    sesionesActivas.set(uid, whatsappSock);
     // =========================================================================
     // 🚀 INTERCEPTOR MAESTRO DE ENVÍOS (El aniquilador de duplicados)
     // Atrapa cualquier cosa que el bot envíe y guarda su ID en la memoria temporal.
@@ -622,10 +598,12 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // 🚀 ENDPOINTS DE GESTIÓN DE CONTACTOS Y COMUNIDADES
 // =========================================================================
 
-// Obtener toda la lista de contactos para la barra lateral de tu chat
 app.get('/api/contactos', async (req, res) => {
     try {
-        const snapshot = await db.collection('crm_contactos').orderBy('ultimaActividad', 'desc').get();
+        const { uid } = req.query;
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
+
+        const snapshot = await db.collection('usuarios').doc(uid).collection('crm_contactos').orderBy('ultimaActividad', 'desc').get();
         let contactos = [];
         snapshot.forEach(doc => contactos.push(doc.data()));
         res.json(contactos);
@@ -634,13 +612,13 @@ app.get('/api/contactos', async (req, res) => {
     }
 });
 
-// Cambiar el nombre a un cliente o comunidad de forma personalizada
 app.put('/api/contactos/:jid', async (req, res) => {
     try {
         const { jid } = req.params;
-        const { nombrePersonalizado } = req.body;
+        const { nombrePersonalizado, uid } = req.body;
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
         
-        await db.collection('crm_contactos').doc(jid).update({
+        await db.collection('usuarios').doc(uid).collection('crm_contactos').doc(jid).update({
             nombrePersonalizado: nombrePersonalizado
         });
         
@@ -654,15 +632,23 @@ app.put('/api/contactos/:jid', async (req, res) => {
 // 🌐 ENDPOINT MANUAL: BANNER HD CRISTALINO (SIN CDN - RECTÁNGULO PURO)
 // =====================================================================
 app.post('/send-text', async (req, res) => {
-    const { numero, mensaje, linkData } = req.body; 
-    if (!whatsappSock) return res.status(500).json({ error: "No conectado" });
+    // 🚀 1. Recibimos el 'uid' del frontend
+    const { uid, numero, mensaje, linkData } = req.body; 
+    
+    // 🚀 2. Extraemos el "teléfono" específico de este usuario
+    const whatsappSockLocal = sesionesActivas.get(uid);
+
+    if (!whatsappSockLocal) {
+        return res.status(401).json({ error: "Tu sesión de WhatsApp no está activa o el QR no ha sido escaneado." });
+    }
 
     try {
         const mensajeFinal = procesarSpintax(mensaje);
         const jidReal = formatearJid(numero);
 
         if (linkData && linkData.url) {
-            await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData);
+            // Nota: Luego adaptaremos enviarTarjetaEnlace para que reciba 'whatsappSockLocal'
+            await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal);
         } else {
             const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
             const urls = mensajeFinal.match(urlRegex);
@@ -670,16 +656,18 @@ app.post('/send-text', async (req, res) => {
             if (urls && urls.length > 0) {
                 const linkDetectado = urls[0];
                 const linkDataInfo = await extraerMetadatos(linkDetectado);
-                await enviarTarjetaEnlace(jidReal, mensajeFinal, linkDataInfo);
+                await enviarTarjetaEnlace(jidReal, mensajeFinal, linkDataInfo, whatsappSockLocal);
             } else {
-                await whatsappSock.sendMessage(jidReal, { text: mensajeFinal });
+                // 🚀 3. Usamos la instancia aislada del usuario
+                await whatsappSockLocal.sendMessage(jidReal, { text: mensajeFinal });
             }
         }
 
-        await guardarMensajeBD(numero, "TrueWin", mensajeFinal, 'out');
+        // Nota: Luego adaptaremos guardarMensajeBD para que reciba el 'uid'
+        await guardarMensajeBD(uid, numero, "TrueWin", mensajeFinal, 'out');
         
-        // 🚀 EMISIÓN EN VIVO: Le avisa a tu CRM que dibuje la burbuja
-        io.emit('nuevo-mensaje', { 
+        // 🚀 4. EMISIÓN PRIVADA CON EL PAYLOAD ORIGINAL INTACTO
+        io.to(uid).emit('nuevo-mensaje', { 
             numero: jidReal, 
             nombre: "TrueWin", 
             texto: mensajeFinal, 
@@ -693,7 +681,7 @@ app.post('/send-text', async (req, res) => {
 
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual con auto-tarjeta:", error);
+        console.error("Fallo al enviar texto manual:", error);
         res.status(500).json({ error: "Fallo al enviar texto" });
     }
 });
@@ -919,7 +907,10 @@ app.get('/api/foto-perfil', async (req, res) => {
 
 app.get('/api/automatizaciones', async (req, res) => {
     try {
-        const snapshot = await db.collection('crm_automatizaciones').get();
+        const { uid } = req.query;
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
+
+        const snapshot = await db.collection('usuarios').doc(uid).collection('crm_automatizaciones').get();
         let autos = [];
         snapshot.forEach(doc => autos.push(doc.data()));
         res.json(autos);
@@ -931,7 +922,10 @@ app.get('/api/automatizaciones', async (req, res) => {
 app.post('/api/automatizaciones', async (req, res) => {
     try {
         const data = req.body;
-        await db.collection('crm_automatizaciones').doc(data.id).set(data);
+        const { uid } = data; // 🚀 El frontend debe inyectarlo en el JSON
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
+
+        await db.collection('usuarios').doc(uid).collection('crm_automatizaciones').doc(data.id).set(data);
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: "Fallo al guardar automatización" });
@@ -940,19 +934,26 @@ app.post('/api/automatizaciones', async (req, res) => {
 
 app.delete('/api/automatizaciones/:id', async (req, res) => {
     try {
-        await db.collection('crm_automatizaciones').doc(req.params.id).delete();
+        const { id } = req.params;
+        const { uid } = req.query;
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
+
+        await db.collection('usuarios').doc(uid).collection('crm_automatizaciones').doc(id).delete();
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: "Fallo al eliminar automatización" });
     }
 });
 
-// 🚀 ENDPOINTS DE CONFIGURACIÓN GLOBAL DEL BOT EN LA NUBE
+
 app.get('/api/config/automatizaciones', async (req, res) => {
     try {
-        const doc = await db.collection('crm_config').doc('automatizaciones').get();
+        const { uid } = req.query;
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
+
+        const doc = await db.collection('usuarios').doc(uid).collection('crm_config').doc('automatizaciones').get();
         if (!doc.exists) {
-            return res.json({ activo: false }); // Estado inicial por defecto
+            return res.json({ activo: false }); 
         }
         res.json(doc.data());
     } catch (e) { 
@@ -962,52 +963,51 @@ app.get('/api/config/automatizaciones', async (req, res) => {
 
 app.post('/api/config/automatizaciones', async (req, res) => {
     try {
-        const { activo } = req.body;
-        await db.collection('crm_config').doc('automatizaciones').set({ activo });
+        const { activo, uid } = req.body;
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
+
+        await db.collection('usuarios').doc(uid).collection('crm_config').doc('automatizaciones').set({ activo });
         res.json({ success: true });
     } catch (e) { 
         res.status(500).json({ error: e.message }); 
     }
 });
 
-
 // =========================================================================
 // 5. GESTOR DE PLANTILLAS DINÁMICAS (SECUENCIAS) Y MULTIMEDIA
 // =========================================================================
 app.get('/api/plantillas', async (req, res) => {
     try {
-        const snapshot = await coleccionPlantillas.get();
+        const { uid } = req.query;
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
+
+        const snapshot = await db.collection('usuarios').doc(uid).collection('crm_plantillas').get();
         const plantillas = [];
         snapshot.forEach(doc => plantillas.push({ id: doc.id, ...doc.data() }));
         res.json(plantillas);
-    } catch (error) {
-        console.error("Error obteniendo plantillas:", error);
-        res.status(500).json({ error: "Fallo al obtener plantillas" });
-    }
+    } catch (error) { res.status(500).json({ error: "Fallo al obtener plantillas" }); }
 });
 
 app.post('/api/plantillas', async (req, res) => {
     try {
-        const { id, nombre, secuencia } = req.body;
-        
-        // 🚀 MAGIA: Usamos el ID generado (ej: info_de_cursos) como candado único del documento
-        await coleccionPlantillas.doc(id).set({
-            nombre: nombre,
-            secuencia: secuencia,
-            timestamp: Date.now()
+        const { uid, id, nombre, secuencia } = req.body;
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
+
+        await db.collection('usuarios').doc(uid).collection('crm_plantillas').doc(id).set({
+            nombre: nombre, secuencia: secuencia, timestamp: Date.now()
         });
-        
         res.json({ success: true, id: id });
-    } catch (error) {
-        console.error("Error guardando plantilla:", error);
-        res.status(500).json({ error: "Fallo al guardar plantilla" });
-    }
+    } catch (error) { res.status(500).json({ error: "Fallo al guardar plantilla" }); }
 });
 
 app.delete('/api/plantillas/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        await coleccionPlantillas.doc(id).delete();
+        const { uid } = req.query; // 🚀 Atrapamos el UID que viene en la URL
+        if (!uid) return res.status(401).json({ error: "Falta UID" });
+
+        // 🚀 Eliminamos el documento directamente de la bóveda del usuario
+        await db.collection('usuarios').doc(uid).collection('crm_plantillas').doc(id).delete();
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: "Fallo al eliminar plantilla" });
