@@ -604,54 +604,49 @@ app.post('/send-text', async (req, res) => {
 });
 
 // --- ENVIAR IMAGEN ---
-app.post('/send-image', upload.single('file'), async (req, res) => {
+app.post('/send-image', async (req, res) => {
     try {
         const email = req.body.email || req.body.uid;
-        const { number, caption } = req.body;
+        const { numero, urlImagen, caption } = req.body;
 
-        if (!email) {
-            return res.status(400).json({ success: false, message: 'Falta el parámetro email.' });
-        }
+        if (!email) return res.status(400).json({ success: false, message: 'Falta email.' });
 
         const whatsappSockLocal = sesionesActivas.get(email);
-        if (!whatsappSockLocal) {
-            return res.status(500).json({ success: false, message: `Instancia no conectada para ${email}` });
-        }
+        if (!whatsappSockLocal) return res.status(401).json({ success: false, message: `Instancia no conectada para ${email}` });
 
-        if (!number || !req.file) {
-            return res.status(400).json({ success: false, message: 'Número y archivo requeridos.' });
-        }
+        if (!numero || !urlImagen) return res.status(400).json({ success: false, message: 'Número y urlImagen requeridos.' });
 
-        const formattedNumber = formatearJid(number);
-        const filePath = req.file.path;
+        const formattedNumber = formatearJid(numero);
+        const captionFinal = typeof procesarSpintax === 'function' ? procesarSpintax(caption) : caption;
+
+        await whatsappSockLocal.sendPresenceUpdate('composing', formattedNumber);
+        
+        // 🚀 DESCARGA EN RAM: Garantiza que la imagen fluya desde Firebase Storage a Meta
+        const resMedia = await fetch(urlImagen);
+        const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
 
         await whatsappSockLocal.sendMessage(formattedNumber, {
-            image: { url: filePath },
-            caption: caption || ''
+            image: bufferMedia,
+            caption: captionFinal || ''
         });
 
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-        }
+        await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
-        const textoMensaje = caption || '[Imagen]';
-        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, null, 'image');
+        const textoMensaje = captionFinal || '[Imagen]';
+        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, urlImagen, 'image');
 
-        // Payload estandarizado para Socket.IO
-        const responseData = {
-            numero: number,
+        io.to(email).emit('nuevo-mensaje', {
+            numero: formattedNumber,
             nombre: "TrueWin",
             texto: textoMensaje,
             hora: new Date().toISOString(),
             timestamp: Date.now(),
             remitente: null,
-            mediaUrl: null, 
+            mediaUrl: urlImagen, 
             mediaType: 'image',
             tipo: 'out'
-        };
-
-        io.to(email).emit('nuevo-mensaje', responseData);
-        res.json({ success: true, message: 'Imagen enviada con éxito.', data: responseData });
+        });
+        res.json({ success: true, message: 'Imagen enviada con éxito.' });
     } catch (error) {
         console.error('Error al enviar la imagen:', error);
         res.status(500).json({ success: false, message: 'Error al enviar imagen: ' + error.message });
@@ -659,111 +654,96 @@ app.post('/send-image', upload.single('file'), async (req, res) => {
 });
 
 // --- ENVIAR VIDEO ---
-app.post('/send-video', upload.single('file'), async (req, res) => {
+app.post('/send-video', async (req, res) => {
     try {
         const email = req.body.email || req.body.uid;
-        const { number, caption } = req.body;
+        const { numero, urlVideo, caption } = req.body;
 
-        if (!email) {
-            return res.status(400).json({ success: false, message: 'Falta el parámetro email.' });
-        }
+        if (!email) return res.status(400).json({ success: false, message: 'Falta email.' });
 
         const whatsappSockLocal = sesionesActivas.get(email);
-        if (!whatsappSockLocal) {
-            return res.status(500).json({ success: false, message: `Instancia no conectada para ${email}` });
-        }
+        if (!whatsappSockLocal) return res.status(401).json({ success: false, message: `Instancia no conectada para ${email}` });
 
-        if (!number || !req.file) {
-            return res.status(400).json({ success: false, message: 'Número y video requeridos.' });
-        }
+        if (!numero || !urlVideo) return res.status(400).json({ success: false, message: 'Número y urlVideo requeridos.' });
 
-        const formattedNumber = formatearJid(number);
-        const filePath = req.file.path;
+        const formattedNumber = formatearJid(numero);
+        const captionFinal = typeof procesarSpintax === 'function' ? procesarSpintax(caption) : caption;
+
+        await whatsappSockLocal.sendPresenceUpdate('composing', formattedNumber);
+
+        // 🚀 EL TRUCO QUE SALVÓ LAS AUTOMATIZACIONES: Descargar y forzar el buffer
+        const resMedia = await fetch(urlVideo);
+        const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
 
         await whatsappSockLocal.sendMessage(formattedNumber, {
-            video: { url: filePath },
-            caption: caption || '',
-            mimetype: req.file.mimetype
+            video: bufferMedia,
+            caption: captionFinal || '',
+            mimetype: 'video/mp4' // 🚀 Sello obligatorio anti-imagen rota
         });
 
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-        }
+        await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
-        const textoMensaje = caption || '[Video]';
-        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, null, 'video');
+        const textoMensaje = captionFinal || '[Video]';
+        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, urlVideo, 'video');
 
-        const responseData = {
-            numero: number,
+        io.to(email).emit('nuevo-mensaje', {
+            numero: formattedNumber,
             nombre: "TrueWin",
             texto: textoMensaje,
             hora: new Date().toISOString(),
             timestamp: Date.now(),
             remitente: null,
-            mediaUrl: null,
+            mediaUrl: urlVideo,
             mediaType: 'video',
             tipo: 'out'
-        };
-
-        io.to(email).emit('nuevo-mensaje', responseData);
-        res.json({ success: true, message: 'Video enviado con éxito.', data: responseData });
+        });
+        res.json({ success: true, message: 'Video enviado con éxito.' });
     } catch (error) {
-        console.error('Error al enviar el video:', error);
         res.status(500).json({ success: false, message: 'Error al enviar video: ' + error.message });
     }
 });
 
 // --- ENVIAR AUDIO ---
-app.post('/send-audio', upload.single('file'), async (req, res) => {
+app.post('/send-audio', async (req, res) => {
     try {
         const email = req.body.email || req.body.uid;
-        const { number } = req.body;
+        const { numero, urlAudio } = req.body;
 
-        if (!email) {
-            return res.status(400).json({ success: false, message: 'Falta el parámetro email.' });
-        }
+        if (!email) return res.status(400).json({ success: false, message: 'Falta email.' });
 
         const whatsappSockLocal = sesionesActivas.get(email);
-        if (!whatsappSockLocal) {
-            return res.status(500).json({ success: false, message: `Instancia no conectada para ${email}` });
-        }
+        if (!whatsappSockLocal) return res.status(401).json({ success: false, message: `Instancia no conectada para ${email}` });
 
-        if (!number || !req.file) {
-            return res.status(400).json({ success: false, message: 'Número y audio requeridos.' });
-        }
+        if (!numero || !urlAudio) return res.status(400).json({ success: false, message: 'Número y urlAudio requeridos.' });
 
-        const formattedNumber = formatearJid(number);
-        const filePath = req.file.path;
+        const formattedNumber = formatearJid(numero);
 
+        await whatsappSockLocal.sendPresenceUpdate('recording', formattedNumber);
+        
         await whatsappSockLocal.sendMessage(formattedNumber, {
-            audio: { url: filePath },
-            mimetype: 'audio/mp4',
+            audio: { url: urlAudio },
+            mimetype: 'audio/ogg; codecs=opus',
             ptt: true
         });
 
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-        }
+        await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
         const textoMensaje = '[Nota de voz]';
-        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, null, 'audio');
+        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, urlAudio, 'audio');
 
-        const responseData = {
-            numero: number,
+        io.to(email).emit('nuevo-mensaje', {
+            numero: formattedNumber,
             nombre: "TrueWin",
             texto: textoMensaje,
             hora: new Date().toISOString(),
             timestamp: Date.now(),
             remitente: null,
-            mediaUrl: null,
+            mediaUrl: urlAudio,
             mediaType: 'audio',
             tipo: 'out'
-        };
-
-        io.to(email).emit('nuevo-mensaje', responseData);
-        res.json({ success: true, message: 'Audio enviado con éxito.', data: responseData });
+        });
+        res.json({ success: true, message: 'Audio enviado con éxito.' });
     } catch (error) {
-        console.error('Error al enviar el audio:', error);
         res.status(500).json({ success: false, message: 'Error al enviar audio: ' + error.message });
     }
 });
