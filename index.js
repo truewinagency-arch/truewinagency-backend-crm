@@ -481,14 +481,14 @@ async function connectToWhatsApp(uid) {
         }
         
         // 🚀 GUARDADO DINÁMICO: Pasamos la variable 'tipoMensaje' ('in' u 'out') a la base de datos
-        await guardarMensajeBD(identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType);
+       await guardarMensajeBD(uid, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType);
 
-        // 🚀 PROTECCIÓN DEL BOT: Solo activamos la automatización si el mensaje es ENTRANTE
+        // 🚀 PROTECCIÓN DEL BOT
         if (tipoMensaje === 'in') {
-            procesarBotEnNube(identificador, texto);
+            procesarBotEnNube(uid, identificador, texto, whatsappSock); // Pasamos las dependencias
         }
 
-        io.emit('nuevo-mensaje', { 
+        io.to(uid).emit('nuevo-mensaje', { 
             numero: identificador, 
             nombre: nombrePerfil, 
             texto: texto, 
@@ -496,7 +496,7 @@ async function connectToWhatsApp(uid) {
             remitente: remitenteEspecifico,
             mediaUrl: mediaUrl,
             mediaType: mediaType,
-            tipo: tipoMensaje // 🚀 MANDAMOS EL TIPO AL FRONTEND PARA QUE LO DIBUJE A LA DERECHA
+            tipo: tipoMensaje
         });
     });
 
@@ -820,47 +820,32 @@ app.get('/api/historial', async (req, res) => {
 
 // 🚀 ENDPOINT: Activa el doble check azul en el teléfono del cliente
 app.post('/api/marcar-visto', async (req, res) => {
-    const { numero } = req.body;
-    if (!whatsappSock || !numero) return res.json({ success: false });
+    const { numero, uid } = req.body;
+    const whatsappSockLocal = sesionesActivas.get(uid);
+    if (!whatsappSockLocal || !numero) return res.json({ success: false });
     
     try {
-        if (ultimosMensajesKey[numero]) {
-            // Enviamos el recibo de lectura oficial a los servidores de Meta
-            await whatsappSock.readMessages([ultimosMensajesKey[numero]]);
+        if (ultimosMensajesKey[uid] && ultimosMensajesKey[uid][numero]) {
+            await whatsappSockLocal.readMessages([ultimosMensajesKey[uid][numero]]);
             res.json({ success: true });
         } else {
             res.json({ success: true, message: "Sin mensajes pendientes en caché" });
         }
     } catch (e) {
-        console.error("Error al marcar visto:", e);
         res.status(500).json({ error: e.message });
     }
 });
 
-// 🚀 NUEVO ENDPOINT INDEPENDIENTE: Resuelve fotos bajo demanda en segundo plano
 app.get('/api/foto-perfil', async (req, res) => {
-    const { jid } = req.query;
-    if (!whatsappSock || !jid) return res.json({ url: null });
+    const { jid, uid } = req.query;
+    const whatsappSockLocal = sesionesActivas.get(uid);
+    if (!whatsappSockLocal || !jid) return res.json({ url: null });
     
     try {
-        // 🌟 PAUSA DE CAMUFLAJE: Esperamos 350ms aleatorios para que Meta 
-        // no detecte que las peticiones se hacen en ráfaga automática desde el CRM
         await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 200) + 200));
-
-        const urlFoto = await whatsappSock.profilePictureUrl(jid, 'image');
-        
-        console.log(`[Foto Perfil 🟢] Éxito al resolver JID: ${jid}`);
+        const urlFoto = await whatsappSockLocal.profilePictureUrl(jid, 'image');
         return res.json({ url: urlFoto });
-
     } catch (e) {
-        // 🌟 AQUÍ VERÁS EL DIAGNÓSTICO EXACTO EN LA CONSOLA DE RENDER
-        console.error(`[Foto Perfil 🚨] Error exacto para JID ${jid}:`, {
-            mensaje: e.message,
-            codigo: e.statusCode || e.output?.statusCode || 'Sin código',
-            stack: e.stack ? e.stack.split('\n')[1].trim() : ''
-        });
-
-        // Devolvemos null limpiamente al frontend para que no colapse la interfaz
         return res.json({ url: null }); 
     }
 });
@@ -981,7 +966,7 @@ app.delete('/api/plantillas/:id', async (req, res) => {
 // =========================================================================
 // 🚀 FÁBRICA DE TARJETAS ORGÁNICAS (Resolución Nativa + Entrega Blindada)
 // =========================================================================
-async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
+async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal) {
     let thumbnailBuffer = null;
     let finalWidth = 0;
     let finalHeight = 0;
@@ -1060,92 +1045,130 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData) {
         payloadExtended.thumbnailHeight = finalHeight;
     }
 
-    // Acoplamos el contenido usando el validador estándar de Baileys
+    // Acoplamos el contenido usando la instancia local aislada del usuario
     const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
         extendedTextMessage: payloadExtended
-    }, { userJid: whatsappSock.user.id });
+    }, { userJid: whatsappSockLocal.user.id });
 
-    // Despachamos el paquete directamente al túnel de mensajes
-    await whatsappSock.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
+    // Despachamos el paquete directamente al túnel de mensajes de ese usuario específico
+    await whatsappSockLocal.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
     console.log(`[Tarjeta Orgánica] Mensaje transmitido de forma segura al JID: ${jidReal}`);
 }
 
-
-// 🚀 CEREBRO DEL CHATBOT EN LA NUBE: Evalúa palabras clave 24/7 de forma autónoma
-// 🚀 AJUSTE EN EN backend (index.js): Fuerza el visto automático en la nube antes de disparar
-async function procesarBotEnNube(numeroCliente, textoMensaje) {
-    if (!textoMensaje || !whatsappSock) return;
+async function procesarBotEnNube(uid, numeroCliente, textoMensaje, whatsappSockLocal) {
+    if (!textoMensaje || !whatsappSockLocal || !uid) return;
     const textoLimpio = textoMensaje.toLowerCase().trim();
 
     try {
-        const configDoc = await db.collection('crm_config').doc('automatizaciones').get();
+        const configDoc = await db.collection('usuarios').doc(uid).collection('crm_config').doc('automatizaciones').get();
         if (!configDoc.exists || !configDoc.data().activo) return;
 
-        const autosSnapshot = await db.collection('crm_automatizaciones').get();
+        const autosSnapshot = await db.collection('usuarios').doc(uid).collection('crm_automatizaciones').get();
         let automatizaciones = [];
         autosSnapshot.forEach(doc => automatizaciones.push(doc.data()));
 
         for (const auto of automatizaciones) {
-            // 🚀 SEPARADOR DE CHIPS EN LA NUBE
             const arrayKeywords = auto.palabraClave.split(',').map(k => k.toLowerCase().trim()).filter(k => k);
             let haceMatch = false;
-            let keywordUsada = "";
 
-            // Evaluamos cada chip de forma individual
             for (const kw of arrayKeywords) {
-                if (auto.condicion === 'exacta' && textoLimpio === kw) { haceMatch = true; keywordUsada = kw; break; }
-                if (auto.condicion === 'contiene' && textoLimpio.includes(kw)) { haceMatch = true; keywordUsada = kw; break; }
+                if (auto.condicion === 'exacta' && textoLimpio === kw) { haceMatch = true; break; }
+                if (auto.condicion === 'contiene' && textoLimpio.includes(kw)) { haceMatch = true; break; }
             }
 
             if (haceMatch) {
-                
                 if (auto.frecuencia === 'unica') {
-                    // (Aquí mantienes tu código exacto del idLogUnico, registroDoc, etc...)
                     const idLogUnico = `${auto.id}_${numeroCliente.replace(/[^a-zA-Z0-9]/g, '')}`;
-                    const registroDoc = await db.collection('crm_registro_bot').doc(idLogUnico).get();
+                    const registroDoc = await db.collection('usuarios').doc(uid).collection('crm_registro_bot').doc(idLogUnico).get();
                     
-                    if (registroDoc.exists) {
-                        console.log(`[🤖 Bot Protegido] El cliente ya recibió la regla. Omitiendo.`);
-                        break; 
-                    }
+                    if (registroDoc.exists) break; 
                     
-                    await db.collection('crm_registro_bot').doc(idLogUnico).set({
-                        idAutomatizacion: auto.id,
-                        palabraClave: auto.palabraClave,
-                        numeroCliente: numeroCliente,
-                        ejecutadoEl: new Date().toISOString()
+                    await db.collection('usuarios').doc(uid).collection('crm_registro_bot').doc(idLogUnico).set({
+                        idAutomatizacion: auto.id, palabraClave: auto.palabraClave, numeroCliente: numeroCliente, ejecutadoEl: new Date().toISOString()
                     });
                 }
 
-                console.log(`[🤖 Bot en Nube] Ejecución autorizada para la variante "${keywordUsada}". Despachando secuencia...`);
-                
-                // 🚀 CANDADO ANTI-BAN 2: Pausa biológica antes de clavar el visto
                 const tiempoLecturaHumana = Math.floor(Math.random() * (3500 - 1500 + 1)) + 1500;
-                
                 setTimeout(async () => {
-                    if (ultimosMensajesKey[numeroCliente]) {
-                        try {
-                            await whatsappSock.readMessages([ultimosMensajesKey[numeroCliente]]);
-                        } catch (e) { }
+                    if (ultimosMensajesKey[uid] && ultimosMensajesKey[uid][numeroCliente]) {
+                        try { await whatsappSockLocal.readMessages([ultimosMensajesKey[uid][numeroCliente]]); } catch (e) { }
                     }
                 }, tiempoLecturaHumana);
 
-                // 3. Cargar secuencia y disparar ráfaga asíncrona (esto se mantiene igual)
-                const tplDoc = await db.collection('crm_plantillas').doc(auto.idPlantilla).get();
-                if (!tplDoc.exists) {
-                    console.error(`La plantilla ${auto.idPlantilla} no existe en Firestore.`);
-                    break;
-                }
+                const tplDoc = await db.collection('usuarios').doc(uid).collection('crm_plantillas').doc(auto.idPlantilla).get();
+                if (!tplDoc.exists) break;
                 
-                despacharFlujoDesdeNube(numeroCliente, tplDoc.data());
+                despacharFlujoDesdeNube(uid, numeroCliente, tplDoc.data(), whatsappSockLocal);
                 break; 
             }
         }
-    } catch (err) {
-        console.error("Error en el validador de frecuencia en la nube:", err);
-    }
+    } catch (err) {}
 }
 
+async function despacharFlujoDesdeNube(uid, numeroDestino, tpl, whatsappSockLocal) {
+    const pause = (ms) => new Promise(res => setTimeout(res, ms));
+    try { await pause(Math.floor(Math.random() * (2200 - 1200 + 1)) + 1200); } catch (e) {}
+
+    for (const msj of tpl.secuencia) {
+        try {
+            let textoOriginal = msj.texto || ""; let mUrl = msj.url || null; let mType = null;
+            const jidReal = formatearJid(numeroDestino);
+            let textoBurbuja = msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace' ? procesarSpintax(textoOriginal) : textoOriginal;
+
+            try {
+                if (msj.tipo === 'audio') {
+                    await whatsappSockLocal.sendPresenceUpdate('recording', numeroDestino);
+                    await pause(4000); 
+                } else {
+                    await whatsappSockLocal.sendPresenceUpdate('composing', numeroDestino);
+                    const caracteres = textoBurbuja ? textoBurbuja.length : 20;
+                    let tiempoTipeo = Math.max(1200, Math.min((caracteres * Math.floor(Math.random() * (55 - 25 + 1)) + 25) + Math.floor(Math.random() * (800 - 300 + 1)) + 300, 6500));
+                    await pause(tiempoTipeo);
+                }
+            } catch (e) { }
+
+            if (msj.tipo === 'texto') {
+                const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
+                const urls = textoBurbuja.match(urlRegex);
+                if (urls && urls.length > 0) {
+                    const linkDataInfo = await extraerMetadatos(urls[0]);
+                    await enviarTarjetaEnlace(jidReal, textoBurbuja, linkDataInfo, whatsappSockLocal);
+                } else {
+                    await whatsappSockLocal.sendMessage(jidReal, { text: textoBurbuja });
+                }
+            } else if (msj.tipo === 'media' && msj.url) {
+                try {
+                    const resMedia = await fetch(msj.url);
+                    const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
+                    const contentType = resMedia.headers.get('content-type') || '';
+
+                    if (contentType.includes('video') || msj.url.toLowerCase().includes('.mp4') || msj.url.toLowerCase().includes('.mov')) {
+                        mType = 'video';
+                        await whatsappSockLocal.sendMessage(jidReal, { video: bufferMedia, caption: textoBurbuja || "[Video enviado]", mimetype: 'video/mp4' });
+                    } else {
+                        mType = 'image';
+                        await whatsappSockLocal.sendMessage(jidReal, { image: bufferMedia, caption: textoBurbuja || "[Imagen enviada]" });
+                    }
+                } catch (error) { }
+            } else if (msj.tipo === 'audio' && msj.url) {
+                mType = 'audio';
+                await whatsappSockLocal.sendMessage(jidReal, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+            }
+
+            try { await whatsappSockLocal.sendPresenceUpdate('paused', numeroDestino); } catch (e) {}
+
+            await guardarMensajeBD(uid, numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
+
+            io.to(uid).emit('nuevo-mensaje', { 
+                numero: numeroDestino, nombre: "TrueWin", texto: textoBurbuja, 
+                hora: new Date().toISOString(), timestamp: Date.now(),
+                remitente: null, mediaUrl: mUrl, mediaType: mType, tipo: 'out' 
+            });
+
+            await pause(Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500);
+        } catch (e) {}
+    }
+}
 // =========================================================================
 // 🚀 RASTREADOR WEB (AUTO-METADATOS PARA EL CRM)
 // =========================================================================
