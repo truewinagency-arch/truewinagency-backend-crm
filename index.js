@@ -431,8 +431,14 @@ async function connectToWhatsApp(email) {
             }
         }
         
-        await guardarMensajeBD(email, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType);
+    await guardarMensajeBD(email, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType);
 
+        // 🚀 AQUÍ ESTÁ LA MAGIA QUE FALTABA: Despertar al bot si el mensaje es del cliente
+        if (tipoMensaje === 'in') {
+            procesarBotEnNube(email, identificador, texto, whatsappSock);
+        }
+
+        // Emite el mensaje al frontend
         io.to(email).emit('nuevo-mensaje', { 
             numero: identificador, 
             nombre: nombrePerfil, 
