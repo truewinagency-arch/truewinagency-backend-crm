@@ -1006,10 +1006,8 @@ async function extraerMetadatos(urlStr) {
 
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal) {
     let thumbnailBuffer = null;
-    let finalWidth = 0;
-    let finalHeight = 0;
-
     let textoVisible = mensajeFinal || "";
+
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
         textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
     }
@@ -1022,18 +1020,15 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
                 const sharp = require('sharp');
                 
                 const metadata = await sharp(originalBuffer).metadata();
-                let originalWidth = metadata.width || 800;
-                let originalHeight = metadata.height || 418;
+                let finalWidth = metadata.width || 800;
+                let finalHeight = metadata.height || 418;
                 
-                if (originalWidth > 800) {
-                    originalHeight = Math.round((800 / originalWidth) * originalHeight);
-                    originalWidth = 800;
+                if (finalWidth > 800) {
+                    finalHeight = Math.round((800 / finalWidth) * finalHeight);
+                    finalWidth = 800;
                 }
                 
-                finalWidth = originalWidth;
-                finalHeight = originalHeight;
                 let calidad = 80;
-
                 thumbnailBuffer = await sharp(originalBuffer)
                     .resize({ width: finalWidth, height: finalHeight, fit: 'inside' })
                     .jpeg({ quality: calidad })
@@ -1052,27 +1047,21 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
         }
     }
 
-    const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
-
-    const payloadExtended = {
+    // ▼ CONSTRUCCIÓN SEGURA NATIVA ▼
+    const payloadContent = {
         text: textoVisible, 
-        matchedText: linkData.url,
-        canonicalUrl: linkData.url,
-        title: linkData.title || "Enlace",
-        description: linkData.description || ""
+        matchedText: linkData ? linkData.url : undefined,
+        canonicalUrl: linkData ? linkData.url : undefined,
+        title: (linkData && linkData.title) ? linkData.title : "Enlace",
+        description: (linkData && linkData.description) ? linkData.description : ""
     };
 
     if (thumbnailBuffer) {
-        payloadExtended.jpegThumbnail = thumbnailBuffer;
-        payloadExtended.thumbnailWidth = finalWidth;
-        payloadExtended.thumbnailHeight = finalHeight;
+        payloadContent.jpegThumbnail = thumbnailBuffer;
     }
 
-    const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
-        extendedTextMessage: payloadExtended
-    }, { userJid: whatsappSockLocal.user.id });
-
-    await whatsappSockLocal.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
+    // 🚀 REEMPLAZO CLAVE: Usamos sendMessage, eliminando el inestable relayMessage
+    await whatsappSockLocal.sendMessage(jidReal, payloadContent);
 }
 
 // =========================================================================
@@ -1145,15 +1134,17 @@ async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLo
             let textoOriginal = msj.texto || ""; 
             let mUrl = msj.url || null; 
             let mType = null;
-            const jidReal = formatearJid(numeroDestino);
+            const jidReal = formatearJid(numeroDestino); //
             let textoBurbuja = (msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace') ? procesarSpintax(textoOriginal) : textoOriginal;
 
             try {
                 if (msj.tipo === 'audio') {
-                    await whatsappSockLocal.sendPresenceUpdate('recording', numeroDestino);
+                    // 🚀 CORREGIDO: Usar jidReal en lugar de numeroDestino
+                    await whatsappSockLocal.sendPresenceUpdate('recording', jidReal);
                     await pause(4000); 
                 } else {
-                    await whatsappSockLocal.sendPresenceUpdate('composing', numeroDestino);
+                    // 🚀 CORREGIDO: Usar jidReal en lugar de numeroDestino
+                    await whatsappSockLocal.sendPresenceUpdate('composing', jidReal);
                     const caracteres = textoBurbuja ? textoBurbuja.length : 20;
                     let tiempoTipeo = Math.max(1200, Math.min((caracteres * Math.floor(Math.random() * (55 - 25 + 1)) + 25) + Math.floor(Math.random() * (800 - 300 + 1)) + 300, 6500));
                     await pause(tiempoTipeo);
@@ -1190,7 +1181,7 @@ async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLo
                 await whatsappSockLocal.sendMessage(jidReal, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
             }
 
-            try { await whatsappSockLocal.sendPresenceUpdate('paused', numeroDestino); } catch (e) {}
+            try { await whatsappSockLocal.sendPresenceUpdate('paused', jidReal); } catch (e) {}
 
             await guardarMensajeBD(email, numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
 
@@ -1233,12 +1224,16 @@ async function iniciarEcosistema() {
 // 🚀 PROCESADOR DE SPINTAX DIRECTO EN CAPA DE RED
 function procesarSpintax(texto) {
     if (!texto) return "";
-    // Escanea bloques estilo {opcion1|opcion2|opcion3} de forma recursiva
-    return texto.replace(/\{([^{}]+)\}/g, (match, opciones) => {
-        const arrayOpciones = opciones.split('|');
-        // Elige un índice aleatorio en caliente
-        return arrayOpciones[Math.floor(Math.random() * arrayOpciones.length)].trim();
-    });
+    let textoString = String(texto);
+    
+    // Resolvemos anidaciones de forma recursiva por si el usuario escribe {{A|B}|C}
+    while (/\{([^{}]+)\}/.test(textoString)) {
+        textoString = textoString.replace(/\{([^{}]+)\}/g, (match, opciones) => {
+            const arrayOpciones = opciones.split('|');
+            return arrayOpciones[Math.floor(Math.random() * arrayOpciones.length)].trim();
+        });
+    }
+    return textoString;
 }
 
 
