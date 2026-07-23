@@ -588,11 +588,11 @@ app.post('/send-text', async (req, res) => {
             }
         }
 
-        await guardarMensajeBD(email, numero, "TrueWin", mensajeFinal, 'out');
+        await guardarMensajeBD(email, numero, "Usuario Anonimo", mensajeFinal, 'out');
         
         io.to(email).emit('nuevo-mensaje', { 
             numero: numero, 
-            nombre: "TrueWin", 
+            nombre: "Usuario Anonimo", 
             texto: mensajeFinal, 
             hora: new Date().toISOString(),
             timestamp: Date.now(),
@@ -639,11 +639,11 @@ app.post('/send-image', async (req, res) => {
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
         const textoMensaje = captionFinal || '[Imagen]';
-        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, urlImagen, 'image');
+        await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", textoMensaje, 'out', null, urlImagen, 'image');
 
         io.to(email).emit('nuevo-mensaje', {
             numero: formattedNumber,
-            nombre: "TrueWin",
+            nombre: "Usuario Anonimo",
             texto: textoMensaje,
             hora: new Date().toISOString(),
             timestamp: Date.now(),
@@ -690,11 +690,11 @@ app.post('/send-video', async (req, res) => {
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
         const textoMensaje = captionFinal || '[Video]';
-        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, urlVideo, 'video');
+        await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", textoMensaje, 'out', null, urlVideo, 'video');
 
         io.to(email).emit('nuevo-mensaje', {
             numero: formattedNumber,
-            nombre: "TrueWin",
+            nombre: "Usuario Anonimo",
             texto: textoMensaje,
             hora: new Date().toISOString(),
             timestamp: Date.now(),
@@ -735,11 +735,11 @@ app.post('/send-audio', async (req, res) => {
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
         const textoMensaje = '[Nota de voz]';
-        await guardarMensajeBD(email, formattedNumber, "TrueWin", textoMensaje, 'out', null, urlAudio, 'audio');
+        await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", textoMensaje, 'out', null, urlAudio, 'audio');
 
         io.to(email).emit('nuevo-mensaje', {
             numero: formattedNumber,
-            nombre: "TrueWin",
+            nombre: "Usuario Anonimo",
             texto: textoMensaje,
             hora: new Date().toISOString(),
             timestamp: Date.now(),
@@ -1183,12 +1183,12 @@ async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLo
 
             try { await whatsappSockLocal.sendPresenceUpdate('paused', jidReal); } catch (e) {}
 
-            await guardarMensajeBD(email, numeroDestino, "TrueWin", textoBurbuja, 'out', null, mUrl, mType);
+            await guardarMensajeBD(email, numeroDestino, "Usuario Anonimo", textoBurbuja, 'out', null, mUrl, mType);
 
             // 🚀 EMISIÓN POR SALA PRIVADA IDENTIFICADA POR EMAIL
             io.to(email).emit('nuevo-mensaje', { 
                 numero: numeroDestino, 
-                nombre: "TrueWin", 
+                nombre: "Usuario Anonimo", 
                 texto: textoBurbuja, 
                 hora: new Date().toISOString(), 
                 timestamp: Date.now(),
