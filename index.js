@@ -760,10 +760,22 @@ app.post('/send-audio', async (req, res) => {
 
 app.get('/api/historial', async (req, res) => {
     try {
-        const email = req.query.email || req.query.uid; // Corregida lectura de email
+        const email = req.query.email || req.query.uid; 
+        const desdeIso = req.query.desdeIso; // ◄ 1. Recibimos la última fecha (Si existe)
+
         if (!email) return res.status(401).json({ error: "Falta email" });
 
-        const snapshot = await db.collection('user_profiles').doc(email).collection('crm_mensajes').orderBy('timestamp', 'asc').get();
+        // 2. Consulta base a Firebase
+        let query = db.collection('user_profiles').doc(email).collection('crm_mensajes');
+        
+        // 3. ⚡ DELTA SYNC: Si enviaron una fecha, solo traemos los mensajes MÁS NUEVOS a esa fecha
+        if (desdeIso) {
+            const timestampMinimo = new Date(desdeIso).getTime();
+            query = query.where('timestamp', '>', timestampMinimo);
+        }
+
+        // 4. Ejecutamos ordenando de forma ascendente
+        const snapshot = await query.orderBy('timestamp', 'asc').get();
         
         let todosLosMensajes = [];
         snapshot.forEach(doc => todosLosMensajes.push(doc.data()));
