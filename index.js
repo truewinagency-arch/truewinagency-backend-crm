@@ -803,23 +803,27 @@ app.get('/api/historial', async (req, res) => {
             let chatArray = historial[data.numero];
             let ultimoMensaje = chatArray.length > 0 ? chatArray[chatArray.length - 1] : null;
 
-            // Lógica de Collage para imágenes consecutivas
+            // ▼ 1. FUNCIÓN ESTRICTA ANTI-TEXTO ▼
+            const esTextoVacio = (txt) => !txt || txt.trim() === "" || txt === "[Archivo o mensaje interactivo]" || txt === "[Imagen]";
+            
+            const textoUltimoVacio = esTextoVacio(ultimoMensaje ? ultimoMensaje.texto : "");
+            const textoActualVacio = esTextoVacio(data.texto);
+
+            // ▼ 2. LÓGICA DE COLLAGE PURA ▼
             if (
                 ultimoMensaje && 
                 ultimoMensaje.tipo === data.tipo &&
                 ultimoMensaje.mediaType === 'image' && 
                 data.mediaType === 'image' &&
-                (data.timestamp - ultimoMensaje.timestamp) < 60000 
+                textoUltimoVacio && 
+                textoActualVacio && // ◄ PROHÍBE UNIR SI HAY TEXTO
+                (data.timestamp - ultimoMensaje.timestamp) <= 60000 
             ) {
-                if (!ultimoMensaje.esCollage) {
-                    ultimoMensaje.esCollage = true;
-                    ultimoMensaje.mediaUrls = [ultimoMensaje.mediaUrl];
-                }
-                ultimoMensaje.mediaUrls.push(data.mediaUrl);
+                // Combinamos las URLs separadas por coma
+                ultimoMensaje.mediaUrl = ultimoMensaje.mediaUrl + "," + data.mediaUrl;
                 
-                if (data.texto && data.texto !== "[Archivo o mensaje interactivo]") {
-                    ultimoMensaje.texto = ultimoMensaje.texto + "\n" + data.texto;
-                }
+                // ◄ EL SECRETO: Actualizamos el timestamp para que el "minuto" se renueve (1:01, 1:02, 1:03...)
+                ultimoMensaje.timestamp = data.timestamp; 
             } else {
                 chatArray.push({ 
                     tipo: data.tipo, 
@@ -828,8 +832,7 @@ app.get('/api/historial', async (req, res) => {
                     timestamp: data.timestamp,
                     remitente: data.remitente || null,
                     mediaUrl: data.mediaUrl || null,
-                    mediaType: data.mediaType || null,
-                    esCollage: false
+                    mediaType: data.mediaType || null
                 });
             }
 
