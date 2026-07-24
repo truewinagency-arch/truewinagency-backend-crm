@@ -454,13 +454,12 @@ async function connectToWhatsApp(email) {
     // ▼ NUEVO: ESCUCHADOR DE ESTADOS (CHECKMARKS) ▼
     whatsappSock.ev.on('messages.update', async (updates) => {
         for (const update of updates) {
+            // Si el evento tiene una actualización de estado (2 = Entregado, 3 = Leído, 4 = Reproducido)
             if (update.update.status) {
-                // status: 2 = Entregado, 3 = Leído, 4 = Reproducido (Audio)
-                io.to(email).emit('estado-mensaje', {
-                    idMensaje: update.key.id,
-                    numero: update.key.remoteJid,
-                    estado: update.update.status
-                });
+                const statusNum = update.update.status;
+                const remoteJid = update.key.remoteJid;
+                // Emitimos el checkmark usando el canal de estado para no sobrecargar el chat
+                io.to(email).emit('estado-conexion', `check_${remoteJid}_${statusNum}`);
             }
         }
     });
