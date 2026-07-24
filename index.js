@@ -451,15 +451,17 @@ async function connectToWhatsApp(email) {
         });
     });
 
-    // ▼ NUEVO: ESCUCHADOR DE ESTADOS (CHECKMARKS) ▼
-    whatsappSock.ev.on('messages.update', async (updates) => {
+  whatsappSock.ev.on('messages.update', async (updates) => {
         for (const update of updates) {
-            // Si el evento tiene una actualización de estado (2 = Entregado, 3 = Leído, 4 = Reproducido)
+            // Si el evento trae un cambio de estado (2=Entregado, 3=Leído, 4=Audio Reproducido)
             if (update.update.status) {
                 const statusNum = update.update.status;
                 const remoteJid = update.key.remoteJid;
-                // Emitimos el checkmark usando el canal de estado para no sobrecargar el chat
-                io.to(email).emit('estado-conexion', `check_${remoteJid}_${statusNum}`);
+                
+                if (statusNum >= 2 && remoteJid) {
+                    // Enviamos un string codificado por el canal de estado para no alterar tu socket
+                    io.to(email).emit('estado-conexion', `check_${remoteJid}_${statusNum}`);
+                }
             }
         }
     });
