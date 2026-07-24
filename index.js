@@ -457,12 +457,10 @@ async function connectToWhatsApp(email) {
                 const statusNum = update.update.status;
                 const remoteJid = update.key.remoteJid;
                 
-                // SOLO registramos si el mensaje fue Leído (3) o Reproducido (4)
+                // Si el cliente lo Leyó (3) o Reprodujo el audio (4), lo guardamos en Firebase
                 if (statusNum >= 3 && remoteJid) {
                     const horaLecturaIso = new Date().toISOString();
-                    
                     try {
-                        // Guardamos la hora exacta en el contacto
                         await getColeccionContactos(email).doc(remoteJid).set({
                             ultimaLectura: horaLecturaIso
                         }, { merge: true });
@@ -860,9 +858,16 @@ app.get('/api/historial', async (req, res) => {
 // =====================================================================
 
 // Activa el doble check azul en el teléfono del cliente
-app.post('/api/marcar-visto', async (req, res) => {
-    const { numero, email } = req.body;
-    if (!email || !numero) return res.status(400).json({ success: false, error: "Faltan parámetros" });
+// ▼ GUARDAMOS CUÁNDO VISTE EL CHAT ▼
+    const horaVisto = new Date().toISOString();
+    try {
+        await getColeccionContactos(email).doc(numero).set({
+            vistoPorMi: horaVisto
+        }, { merge: true });
+        
+        // Emitimos al frontend para quitar el contador en vivo
+        io.to(email).emit('estado-conexion', `visto_por_mi_${numero}_${horaVisto}`);
+    } catch(e) {}
 
     const whatsappSockLocal = sesionesActivas.get(email);
     if (!whatsappSockLocal) return res.json({ success: false, message: "Sesión no encontrada" });
@@ -872,7 +877,7 @@ app.post('/api/marcar-visto', async (req, res) => {
             await whatsappSockLocal.readMessages([ultimosMensajesKey[email][numero]]);
             res.json({ success: true });
         } else {
-            res.json({ success: true, message: "Sin mensajes pendientes en caché" });
+            res.json({ success: true, message: "Sin mensajes pendientes" });
         }
     } catch (e) {
         res.status(500).json({ error: e.message });
