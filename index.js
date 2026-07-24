@@ -399,8 +399,8 @@ async function connectToWhatsApp(email) {
         } else if (messageType === 'audioMessage') {
             mediaType = 'audio';
             texto = ""; 
-        } else if (!texto) {
-            texto = "[Archivo o mensaje interactivo]";
+       } else if (!texto && !mediaType) {
+            texto = "[Mensaje interactivo]";
         }
 
         if (mediaType) {
@@ -449,6 +449,20 @@ async function connectToWhatsApp(email) {
             mediaType: mediaType,
             tipo: tipoMensaje
         });
+    });
+
+    // ▼ NUEVO: ESCUCHADOR DE ESTADOS (CHECKMARKS) ▼
+    whatsappSock.ev.on('messages.update', async (updates) => {
+        for (const update of updates) {
+            if (update.update.status) {
+                // status: 2 = Entregado, 3 = Leído, 4 = Reproducido (Audio)
+                io.to(email).emit('estado-mensaje', {
+                    idMensaje: update.key.id,
+                    numero: update.key.remoteJid,
+                    estado: update.update.status
+                });
+            }
+        }
     });
 
     whatsappSock.ev.on('creds.update', saveCreds);
@@ -638,7 +652,7 @@ app.post('/send-image', async (req, res) => {
 
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
-        const textoMensaje = captionFinal || '[Imagen]';
+        const textoMensaje = captionFinal || '';
         await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", textoMensaje, 'out', null, urlImagen, 'image');
 
         io.to(email).emit('nuevo-mensaje', {
@@ -689,7 +703,7 @@ app.post('/send-video', async (req, res) => {
 
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
-        const textoMensaje = captionFinal || '[Video]';
+        const textoMensaje = captionFinal || '';
         await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", textoMensaje, 'out', null, urlVideo, 'video');
 
         io.to(email).emit('nuevo-mensaje', {
@@ -734,7 +748,7 @@ app.post('/send-audio', async (req, res) => {
 
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
-        const textoMensaje = '[Nota de voz]';
+        const textoMensaje = ''; // ◄ Antes era '[Nota de voz]'
         await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", textoMensaje, 'out', null, urlAudio, 'audio');
 
         io.to(email).emit('nuevo-mensaje', {
