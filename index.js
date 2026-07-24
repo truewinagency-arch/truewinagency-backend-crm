@@ -857,8 +857,11 @@ app.get('/api/historial', async (req, res) => {
 // 🚀 ENDPOINTS DE UTILIDAD Y SESIÓN
 // =====================================================================
 
-// Activa el doble check azul en el teléfono del cliente
-// ▼ GUARDAMOS CUÁNDO VISTE EL CHAT ▼
+app.post('/api/marcar-visto', async (req, res) => {
+    const { numero, email } = req.body;
+    if (!email || !numero) return res.status(400).json({ success: false, error: "Faltan parámetros" });
+
+    // ▼ GUARDAMOS CUÁNDO VISTE EL CHAT ▼
     const horaVisto = new Date().toISOString();
     try {
         await getColeccionContactos(email).doc(numero).set({
