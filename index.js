@@ -453,14 +453,14 @@ async function connectToWhatsApp(email) {
 
   whatsappSock.ev.on('messages.update', async (updates) => {
         for (const update of updates) {
-            // Si el evento trae un cambio de estado (2=Entregado, 3=Leído, 4=Audio Reproducido)
             if (update.update.status) {
                 const statusNum = update.update.status;
                 const remoteJid = update.key.remoteJid;
                 
                 if (statusNum >= 2 && remoteJid) {
-                    // Enviamos un string codificado por el canal de estado para no alterar tu socket
-                    io.to(email).emit('estado-conexion', `check_${remoteJid}_${statusNum}`);
+                    // Agregamos un timestamp ISO exacto para saber CUÁNDO leyó el chat
+                    const horaLecturaIso = new Date().toISOString();
+                    io.to(email).emit('estado-conexion', `check_${remoteJid}_${statusNum}_${horaLecturaIso}`);
                 }
             }
         }
