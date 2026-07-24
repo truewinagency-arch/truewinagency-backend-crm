@@ -457,9 +457,17 @@ async function connectToWhatsApp(email) {
                 const statusNum = update.update.status;
                 const remoteJid = update.key.remoteJid;
                 
-                if (statusNum >= 2 && remoteJid) {
-                    // Agregamos un timestamp ISO exacto para saber CUÁNDO leyó el chat
+                // SOLO registramos si el mensaje fue Leído (3) o Reproducido (4)
+                if (statusNum >= 3 && remoteJid) {
                     const horaLecturaIso = new Date().toISOString();
+                    
+                    try {
+                        // Guardamos la hora exacta en el contacto
+                        await getColeccionContactos(email).doc(remoteJid).set({
+                            ultimaLectura: horaLecturaIso
+                        }, { merge: true });
+                    } catch(e) {}
+                    
                     io.to(email).emit('estado-conexion', `check_${remoteJid}_${statusNum}_${horaLecturaIso}`);
                 }
             }
