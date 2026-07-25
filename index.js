@@ -1257,7 +1257,17 @@ async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLo
                 }
             } else if (msj.tipo === 'audio' && msj.url) {
                 mType = 'audio';
-                await whatsappSockLocal.sendMessage(jidReal, { audio: { url: msj.url }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+
+                // ▼ "CONVERSOR" VISUAL: Generador de ondas para las secuencias ▼
+                const waveData = Array.from({ length: 40 }, () => Math.floor(Math.random() * 70) + 15);
+                const waveformArray = new Uint8Array(waveData);
+
+                await whatsappSockLocal.sendMessage(jidReal, { 
+                    audio: { url: msj.url }, 
+                    mimetype: 'audio/ogg; codecs=opus', 
+                    ptt: true,
+                    waveform: waveformArray // ◄ Inyectamos el diagrama al flujo
+                });
             }
 
             try { await whatsappSockLocal.sendPresenceUpdate('paused', jidReal); } catch (e) {}
