@@ -749,8 +749,8 @@ app.post('/send-audio', async (req, res) => {
         
         await whatsappSockLocal.sendMessage(formattedNumber, {
             audio: { url: urlAudio },
-            mimetype: 'audio/mp4', // ◄ FIX: Formato real del audio grabado en Android
-            ptt: true
+            mimetype: 'audio/ogg; codecs=opus', // ◄ Vuelve a ser ogg
+            ptt: true // ◄ Activamos las ondas
         });
 
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
