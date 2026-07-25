@@ -281,10 +281,11 @@ async function connectToWhatsApp(email) {
         printQRInTerminal: false,
         version: versionWaWeb, 
         browser: Browsers.ubuntu('Chrome'), 
+        syncFullHistory: false, // 🚀 ESCUDO DE RAM 1: Rechaza la descarga masiva de chats viejos al vincular
+        generateHighQualityLinkPreview: false, // 🚀 ESCUDO DE RAM 2: Apaga la renderización de imágenes pesadas en memoria
         getMessage: async (key) => undefined,
         logger: pino({ level: 'silent' }) 
     });
-
     sesionesActivas.set(email, whatsappSock);
 
     const sendMessageOriginal = whatsappSock.sendMessage.bind(whatsappSock);
