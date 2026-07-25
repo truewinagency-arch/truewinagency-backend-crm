@@ -1088,23 +1088,49 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
     let urlObjetivo = linkData ? linkData.url : "";
 
     // =========================================================================
-    // ▼ 1. SOLUCIÓN DEFINITIVA: GRUPOS DE WHATSAPP (SIN RETRASOS) ▼
+    // ▼ 1. INTENTO NATIVO: INVITACIÓN OFICIAL DE WHATSAPP ▼
     // =========================================================================
     if (urlObjetivo && urlObjetivo.includes('chat.whatsapp.com/')) {
-        // Al detectar que es un grupo, bypassamos el Scraper de páginas web.
-        // Lo enviamos como texto puro. Así, el celular del cliente lo detectará 
-        // instantáneamente y dibujará el widget nativo de "Ver Grupo".
-        const textoPlanB = textoVisible ? `${textoVisible}\n\n${urlObjetivo}` : urlObjetivo;
-        
-        await whatsappSockLocal.sendMessage(jidReal, { text: textoPlanB });
-        return; // ¡Terminamos en milisegundos!
+        try {
+            const codeMatch = urlObjetivo.match(/chat\.whatsapp\.com\/([a-zA-Z0-9]{15,25})/);
+            if (codeMatch && codeMatch[1]) {
+                const inviteCode = codeMatch[1];
+                
+                // Timeout de 2 segundos. Si Meta no responde rápido, saltamos al Plan B.
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+                
+                const groupInfo = await Promise.race([
+                    whatsappSockLocal.groupGetInviteInfo(inviteCode),
+                    timeoutPromise
+                ]);
+                
+                const fechaExpiracion = Math.floor(Date.now() / 1000) + 2592000; // 30 días en el futuro
+
+                // ENVIAMOS EL BOTÓN NATIVO
+                await whatsappSockLocal.sendMessage(jidReal, {
+                    groupInvite: {
+                        groupJid: groupInfo.id, // ◄ FIX CRÍTICO: Era groupJid, no groupId
+                        inviteCode: inviteCode,
+                        inviteExpiration: fechaExpiracion,
+                        groupName: groupInfo.subject || "Grupo de WhatsApp",
+                        caption: textoVisible
+                    }
+                });
+                return; // Éxito total, terminamos aquí.
+            }
+        } catch (e) {
+            console.warn("[Interceptar Grupo] Meta tardó en responder. Activando Tarjeta Orgánica.");
+            // Si falla por lentitud, NO abortamos. Dejamos que el código baje 
+            // al Paso 2 para construir una tarjeta web bonita.
+        }
     }
 
     // =========================================================================
-    // ▼ 2. SI NO ES UN GRUPO, SE HACE LA TARJETA ORGÁNICA (SCRAPER) ▼
+    // ▼ 2. CONSTRUCCIÓN DE TARJETA ORGÁNICA (Para webs o si falló el grupo) ▼
     // =========================================================================
     let thumbnailBuffer = null;
 
+    // ◄ FIX ANTI-DUPLICACIÓN: Solo añade el link si NO está en el texto ►
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
         textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
     }
@@ -1156,7 +1182,6 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
         payloadContent.jpegThumbnail = thumbnailBuffer;
     }
 
-    // Enviamos el enlace genérico de otras páginas con su vista previa
     await whatsappSockLocal.sendMessage(jidReal, payloadContent);
 }
 
