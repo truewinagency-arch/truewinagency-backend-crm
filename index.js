@@ -745,17 +745,24 @@ app.post('/send-audio', async (req, res) => {
 
         const formattedNumber = formatearJid(numero);
 
+        // ▼ 1. GENERADOR DEL DIAGRAMA DE ONDAS ▼
+        // Crea 40 picos simulando los altos y bajos naturales de la voz humana
+        const waveData = Array.from({ length: 40 }, () => Math.floor(Math.random() * 70) + 15);
+        const waveformArray = new Uint8Array(waveData);
+
         await whatsappSockLocal.sendPresenceUpdate('recording', formattedNumber);
         
+        // ▼ 2. ENVIAMOS EL AUDIO CON EL DIAGRAMA INCLUIDO ▼
         await whatsappSockLocal.sendMessage(formattedNumber, {
             audio: { url: urlAudio },
-            mimetype: 'audio/ogg; codecs=opus', // ◄ Vuelve a ser ogg
-            ptt: true // ◄ Activamos las ondas
+            mimetype: 'audio/ogg; codecs=opus',
+            ptt: true,
+            waveform: waveformArray // ◄ ¡WhatsApp usará esto para dibujar las barritas!
         });
 
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
-        const textoMensaje = ''; // ◄ Antes era '[Nota de voz]'
+        const textoMensaje = ''; 
         await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", textoMensaje, 'out', null, urlAudio, 'audio');
 
         io.to(email).emit('nuevo-mensaje', {
