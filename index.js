@@ -782,6 +782,32 @@ app.post('/send-audio', async (req, res) => {
     }
 });
 
+// --- DESPACHAR SECUENCIA MANUALMENTE CON LÓGICA HUMANA ---
+app.post('/api/despachar-secuencia-manual', async (req, res) => {
+    try {
+        const { email, numero, secuencia } = req.body;
+
+        if (!email || !numero || !secuencia) {
+            return res.status(400).json({ success: false, message: 'Faltan datos requeridos.' });
+        }
+
+        const whatsappSockLocal = sesionesActivas.get(email);
+        if (!whatsappSockLocal) return res.status(401).json({ success: false, message: `Instancia no conectada` });
+
+        const formattedNumber = formatearJid(numero);
+
+        // Simulamos la estructura de la plantilla que el motor inteligente espera
+        const tpl = { secuencia: secuencia };
+
+        // 🚀 Disparamos la función de la nube en segundo plano (sin await para no bloquear tu app)
+        despacharFlujoDesdeNube(email, formattedNumber, tpl, whatsappSockLocal);
+
+        res.json({ success: true, message: 'Secuencia inteligente iniciada.' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Error: ' + error.message });
+    }
+});
+
 // =========================================================================
 // 📜 HISTORIAL DE CONVERSACIONES
 // =========================================================================
