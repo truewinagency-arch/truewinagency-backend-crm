@@ -1084,8 +1084,42 @@ async function extraerMetadatos(urlStr) {
 }
 
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal) {
-    let thumbnailBuffer = null;
     let textoVisible = mensajeFinal || "";
+    let urlObjetivo = linkData ? linkData.url : "";
+
+    // =========================================================================
+    // ▼ 1. MAGIA: INTERCEPTOR DE INVITACIONES A GRUPOS DE WHATSAPP ▼
+    // =========================================================================
+    if (urlObjetivo && urlObjetivo.includes('chat.whatsapp.com/')) {
+        try {
+            // Extraemos el código exacto de la URL (Ej: FaXM33kSrgeJEHIFMKE8ct)
+            const codeMatch = urlObjetivo.match(/chat\.whatsapp\.com\/([a-zA-Z0-9]{15,25})/);
+            if (codeMatch && codeMatch[1]) {
+                const inviteCode = codeMatch[1];
+                
+                // Le pedimos a los servidores de WhatsApp los metadatos reales del grupo
+                const groupInfo = await whatsappSockLocal.groupGetInviteInfo(inviteCode);
+                
+                // Enviamos el formato nativo especial con el botón oficial
+                await whatsappSockLocal.sendMessage(jidReal, {
+                    groupInvite: {
+                        groupId: groupInfo.id,
+                        inviteCode: inviteCode,
+                        groupName: groupInfo.subject, // Nombre oficial del grupo
+                        caption: textoVisible // El texto que acompaña tu enlace
+                    }
+                });
+                return; // ◄ Terminamos aquí, salimos exitosamente
+            }
+        } catch (e) {
+            console.warn("[Interceptar Grupo] Link revocado o inválido, enviando como link normal.", e.message);
+        }
+    }
+
+    // =========================================================================
+    // ▼ 2. SI NO ES UN GRUPO, SE HACE LA TARJETA ORGÁNICA NORMAL ▼
+    // =========================================================================
+    let thumbnailBuffer = null;
 
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
         textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
@@ -1126,7 +1160,6 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
         }
     }
 
-    // ▼ CONSTRUCCIÓN SEGURA NATIVA ▼
     const payloadContent = {
         text: textoVisible, 
         matchedText: linkData ? linkData.url : undefined,
@@ -1139,7 +1172,7 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
         payloadContent.jpegThumbnail = thumbnailBuffer;
     }
 
-    // 🚀 REEMPLAZO CLAVE: Usamos sendMessage, eliminando el inestable relayMessage
+    // Enviamos el enlace genérico de otras páginas
     await whatsappSockLocal.sendMessage(jidReal, payloadContent);
 }
 
