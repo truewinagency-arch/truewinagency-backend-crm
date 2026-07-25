@@ -281,11 +281,13 @@ async function connectToWhatsApp(email) {
         printQRInTerminal: false,
         version: versionWaWeb, 
         browser: Browsers.ubuntu('Chrome'), 
-        syncFullHistory: false, // 🚀 ESCUDO DE RAM 1: Rechaza la descarga masiva de chats viejos al vincular
-        generateHighQualityLinkPreview: false, // 🚀 ESCUDO DE RAM 2: Apaga la renderización de imágenes pesadas en memoria
+        syncFullHistory: false, // 🚀 ESCUDO DE RAM 1: Rechaza la descarga masiva
+        generateHighQualityLinkPreview: false, // 🚀 ESCUDO DE RAM 2: Apaga renderización
+        markOnlineOnConnect: true, // 🚀 FIX DE SINCRONIZACIÓN: Le avisa a Meta que estás despierto
         getMessage: async (key) => undefined,
         logger: pino({ level: 'silent' }) 
     });
+    
     sesionesActivas.set(email, whatsappSock);
 
     const sendMessageOriginal = whatsappSock.sendMessage.bind(whatsappSock);
@@ -363,7 +365,8 @@ async function connectToWhatsApp(email) {
         if (['protocolMessage', 'pollUpdateMessage', 'pollCreationMessage', 'reactionMessage', 'senderKeyDistributionMessage'].includes(messageType)) return;
 
         const tiempoActualUnix = Math.floor(Date.now() / 1000);
-        if (msg.messageTimestamp && (tiempoActualUnix - msg.messageTimestamp) > 60) return;
+        // ✅ Aumentamos el límite a 10 minutos (600 segundos) para perdonar los retrasos del celular
+        if (msg.messageTimestamp && (tiempoActualUnix - msg.messageTimestamp) > 600) return;
 
         const remoteJid = msg.key.remoteJid;
         const esGrupo = remoteJid.endsWith('@g.us');
