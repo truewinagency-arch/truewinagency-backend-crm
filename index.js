@@ -1092,27 +1092,39 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
     // =========================================================================
     if (urlObjetivo && urlObjetivo.includes('chat.whatsapp.com/')) {
         try {
-            // Extraemos el código exacto de la URL (Ej: FaXM33kSrgeJEHIFMKE8ct)
             const codeMatch = urlObjetivo.match(/chat\.whatsapp\.com\/([a-zA-Z0-9]{15,25})/);
             if (codeMatch && codeMatch[1]) {
                 const inviteCode = codeMatch[1];
                 
-                // Le pedimos a los servidores de WhatsApp los metadatos reales del grupo
-                const groupInfo = await whatsappSockLocal.groupGetInviteInfo(inviteCode);
+                // 1. FIX DE VELOCIDAD: Timeout de 2 segundos máximo. Si Meta tarda, abortamos y pasamos al Plan B.
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
                 
-                // Enviamos el formato nativo especial con el botón oficial
+                const groupInfo = await Promise.race([
+                    whatsappSockLocal.groupGetInviteInfo(inviteCode),
+                    timeoutPromise
+                ]);
+                
+                // 2. FIX DE INVITACIÓN VENCIDA: Le sumamos 30 días en el futuro (30 días * 24h * 60m * 60s)
+                const fechaExpiracion = Math.floor(Date.now() / 1000) + 2592000;
+
                 await whatsappSockLocal.sendMessage(jidReal, {
                     groupInvite: {
                         groupId: groupInfo.id,
                         inviteCode: inviteCode,
-                        groupName: groupInfo.subject, // Nombre oficial del grupo
-                        caption: textoVisible // El texto que acompaña tu enlace
+                        inviteExpiration: fechaExpiracion, // ◄ ¡ESTA ERA LA CLAVE!
+                        groupName: groupInfo.subject,
+                        caption: textoVisible
                     }
                 });
-                return; // ◄ Terminamos aquí, salimos exitosamente
+                return; 
             }
         } catch (e) {
-            console.warn("[Interceptar Grupo] Link revocado o inválido, enviando como link normal.", e.message);
+            console.warn("[Interceptar Grupo] Consulta lenta o error. Activando Plan B instantáneo.");
+            // 3. PLAN B (SIN RETRASOS): Si Meta tarda o el bot no tiene permiso, lo enviamos como texto nativo.
+            // Al recibirlo, el propio WhatsApp del cliente leerá el enlace y creará el botón de "Ver grupo" automáticamente.
+            const textoPlanB = textoVisible ? `${textoVisible}\n\n${urlObjetivo}` : urlObjetivo;
+            await whatsappSockLocal.sendMessage(jidReal, { text: textoPlanB });
+            return;
         }
     }
 
@@ -1172,7 +1184,6 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
         payloadContent.jpegThumbnail = thumbnailBuffer;
     }
 
-    // Enviamos el enlace genérico de otras páginas
     await whatsappSockLocal.sendMessage(jidReal, payloadContent);
 }
 
