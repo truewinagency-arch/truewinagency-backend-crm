@@ -1085,59 +1085,19 @@ async function extraerMetadatos(urlStr) {
 
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal) {
     let textoVisible = mensajeFinal || "";
-    let urlObjetivo = linkData ? linkData.url : "";
-
-    // =========================================================================
-    // ▼ 1. INTENTO NATIVO: INVITACIÓN OFICIAL DE WHATSAPP ▼
-    // =========================================================================
-    if (urlObjetivo && urlObjetivo.includes('chat.whatsapp.com/')) {
-        try {
-            const codeMatch = urlObjetivo.match(/chat\.whatsapp\.com\/([a-zA-Z0-9]{15,25})/);
-            if (codeMatch && codeMatch[1]) {
-                const inviteCode = codeMatch[1];
-                
-                // Timeout de 2 segundos. Si Meta no responde rápido, saltamos al Plan B.
-                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
-                
-                const groupInfo = await Promise.race([
-                    whatsappSockLocal.groupGetInviteInfo(inviteCode),
-                    timeoutPromise
-                ]);
-                
-                const fechaExpiracion = Math.floor(Date.now() / 1000) + 2592000; // 30 días en el futuro
-
-                // ENVIAMOS EL BOTÓN NATIVO
-                await whatsappSockLocal.sendMessage(jidReal, {
-                    groupInvite: {
-                        groupJid: groupInfo.id, // ◄ FIX CRÍTICO: Era groupJid, no groupId
-                        inviteCode: inviteCode,
-                        inviteExpiration: fechaExpiracion,
-                        groupName: groupInfo.subject || "Grupo de WhatsApp",
-                        caption: textoVisible
-                    }
-                });
-                return; // Éxito total, terminamos aquí.
-            }
-        } catch (e) {
-            console.warn("[Interceptar Grupo] Meta tardó en responder. Activando Tarjeta Orgánica.");
-            // Si falla por lentitud, NO abortamos. Dejamos que el código baje 
-            // al Paso 2 para construir una tarjeta web bonita.
-        }
-    }
-
-    // =========================================================================
-    // ▼ 2. CONSTRUCCIÓN DE TARJETA ORGÁNICA (Para webs o si falló el grupo) ▼
-    // =========================================================================
     let thumbnailBuffer = null;
 
-    // ◄ FIX ANTI-DUPLICACIÓN: Solo añade el link si NO está en el texto ►
+    // 1. FIX ANTI-DUPLICACIÓN: Solo añadimos el link si no está ya en el mensaje
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
         textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
     }
 
+    // 2. CONSTRUCTOR DE VISTA PREVIA (Funciona para grupos de WA y webs normales)
     if (linkData && linkData.imageUrl) {
         try {
+            // Descargamos la imagen (Ej: La foto del perfil del grupo de WhatsApp)
             const resImagen = await fetch(linkData.imageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            
             if (resImagen.ok) {
                 const originalBuffer = Buffer.from(await resImagen.arrayBuffer());
                 const sharp = require('sharp');
@@ -1157,6 +1117,7 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
                     .jpeg({ quality: calidad })
                     .toBuffer();
 
+                // Compresión dinámica (Meta exige que la miniatura pese muy poco)
                 while (thumbnailBuffer.length > 40000 && calidad > 10) {
                     calidad -= 5;
                     thumbnailBuffer = await sharp(originalBuffer)
@@ -1166,22 +1127,25 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
                 }
             }
         } catch (e) {
-            console.warn("[Tarjeta Orgánica] Fallo al procesar proporciones:", e.message);
+            console.warn("[Tarjeta Orgánica] Fallo al procesar proporciones de la imagen:", e.message);
         }
     }
 
+    // 3. ESTRUCTURA NATIVA DEL MENSAJE CON TARJETA
     const payloadContent = {
         text: textoVisible, 
         matchedText: linkData ? linkData.url : undefined,
         canonicalUrl: linkData ? linkData.url : undefined,
-        title: (linkData && linkData.title) ? linkData.title : "Enlace",
+        title: (linkData && linkData.title) ? linkData.title : "Enlace Oficial",
         description: (linkData && linkData.description) ? linkData.description : ""
     };
 
+    // Inyectamos la imagen si logramos procesarla
     if (thumbnailBuffer) {
         payloadContent.jpegThumbnail = thumbnailBuffer;
     }
 
+    // 4. ENVÍO INMEDIATO (0 segundos de espera)
     await whatsappSockLocal.sendMessage(jidReal, payloadContent);
 }
 
