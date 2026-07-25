@@ -749,7 +749,7 @@ app.post('/send-audio', async (req, res) => {
         
         await whatsappSockLocal.sendMessage(formattedNumber, {
             audio: { url: urlAudio },
-            mimetype: 'audio/ogg; codecs=opus',
+            mimetype: 'audio/mp4', // ◄ FIX: Formato real del audio grabado en Android
             ptt: true
         });
 
