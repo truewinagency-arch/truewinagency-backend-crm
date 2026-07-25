@@ -1085,8 +1085,10 @@ async function extraerMetadatos(urlStr) {
 
 async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal) {
     let thumbnailBuffer = null;
-    let textoVisible = mensajeFinal || "";
+    let finalWidth = 0;
+    let finalHeight = 0;
 
+    let textoVisible = mensajeFinal || "";
     if (linkData && linkData.url && !textoVisible.includes(linkData.url)) {
         textoVisible = textoVisible ? `${textoVisible}\n\n🌐 ${linkData.url}` : linkData.url;
     }
@@ -1099,15 +1101,18 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
                 const sharp = require('sharp');
                 
                 const metadata = await sharp(originalBuffer).metadata();
-                let finalWidth = metadata.width || 800;
-                let finalHeight = metadata.height || 418;
+                let originalWidth = metadata.width || 800;
+                let originalHeight = metadata.height || 418;
                 
-                if (finalWidth > 800) {
-                    finalHeight = Math.round((800 / finalWidth) * finalHeight);
-                    finalWidth = 800;
+                if (originalWidth > 800) {
+                    originalHeight = Math.round((800 / originalWidth) * originalHeight);
+                    originalWidth = 800;
                 }
                 
+                finalWidth = originalWidth;
+                finalHeight = originalHeight;
                 let calidad = 80;
+
                 thumbnailBuffer = await sharp(originalBuffer)
                     .resize({ width: finalWidth, height: finalHeight, fit: 'inside' })
                     .jpeg({ quality: calidad })
@@ -1126,21 +1131,27 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
         }
     }
 
-    // ▼ CONSTRUCCIÓN SEGURA NATIVA ▼
-    const payloadContent = {
+    const { generateWAMessageFromContent } = require('@whiskeysockets/baileys');
+
+    const payloadExtended = {
         text: textoVisible, 
-        matchedText: linkData ? linkData.url : undefined,
-        canonicalUrl: linkData ? linkData.url : undefined,
-        title: (linkData && linkData.title) ? linkData.title : "Enlace",
-        description: (linkData && linkData.description) ? linkData.description : ""
+        matchedText: linkData.url,
+        canonicalUrl: linkData.url,
+        title: linkData.title || "Enlace",
+        description: linkData.description || ""
     };
 
     if (thumbnailBuffer) {
-        payloadContent.jpegThumbnail = thumbnailBuffer;
+        payloadExtended.jpegThumbnail = thumbnailBuffer;
+        payloadExtended.thumbnailWidth = finalWidth;
+        payloadExtended.thumbnailHeight = finalHeight;
     }
 
-    // 🚀 REEMPLAZO CLAVE: Usamos sendMessage, eliminando el inestable relayMessage
-    await whatsappSockLocal.sendMessage(jidReal, payloadContent);
+    const mensajeProtobuf = generateWAMessageFromContent(jidReal, {
+        extendedTextMessage: payloadExtended
+    }, { userJid: whatsappSockLocal.user.id });
+
+    await whatsappSockLocal.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
 }
 
 // =========================================================================
