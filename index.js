@@ -359,22 +359,25 @@ async function connectToWhatsApp(email) {
         if (msg.key.fromMe && msg.key.id && idsEnviadosPorBot.has(msg.key.id)) return;
         if (!msg.message || msg.key.remoteJid === 'status@broadcast' || msg.key.remoteJid.includes('@newsletter')) return;
 
-        const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
-        const messageType = Object.keys(msg.message || {})[0];
-
-        if (['protocolMessage', 'pollUpdateMessage', 'pollCreationMessage', 'senderKeyDistributionMessage'].includes(messageType)) return;
-
-        // ▼ INTERCEPTOR DE REACCIONES (EMOJIS) ▼
-        if (messageType === 'reactionMessage') {
+        // ================================================================
+        // ▼ 1. ESCUDO ABSOLUTO PARA REACCIONES (ANTES QUE TODO) ▼
+        // ================================================================
+        if (msg.message.reactionMessage) {
             const reaction = msg.message.reactionMessage;
             io.to(email).emit('nuevo-mensaje', { 
                 numero: msg.key.remoteJid, 
                 tipo: 'reaccion', // ◄ Etiqueta especial
-                texto: reaction.text, // El emoji (Si viene vacío "", es que quitaron la reacción)
+                texto: reaction.text || "", // El emoji (Si viene vacío "", es que quitaron la reacción)
                 idOriginal: reaction.key.id // El ID del mensaje al que reaccionaron
             });
-            return; // ◄ Detenemos la ejecución aquí para que no intente guardar un mensaje de texto
+            return; // ◄ ¡MUY IMPORTANTE! Detenemos la ejecución aquí. NUNCA pasará a la BD.
         }
+
+        // ▼ (A PARTIR DE AQUÍ SIGUE TU CÓDIGO NORMAL) ▼
+        const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
+        const messageType = Object.keys(msg.message || {})[0];
+
+        if (['protocolMessage', 'pollUpdateMessage', 'pollCreationMessage', 'senderKeyDistributionMessage'].includes(messageType)) return;
 
         const tiempoActualUnix = Math.floor(Date.now() / 1000);
         // ✅ Aumentamos el límite a 10 minutos (600 segundos) para perdonar los retrasos del celular
