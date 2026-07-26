@@ -357,16 +357,36 @@ async function connectToWhatsApp(email) {
         // ================================================================
         // ▼ 1. ESCUDO ABSOLUTO PARA REACCIONES (ANTES QUE TODO) ▼
         // ================================================================
+       
         if (msg.message.reactionMessage) {
             const reaction = msg.message.reactionMessage;
+            const esMia = msg.key.fromMe ? true : false;
+            const emoji = reaction.text || "";
+            const targetId = reaction.key.id;
+
             io.to(email).emit('nuevo-mensaje', { 
                 numero: msg.key.remoteJid, 
-                tipo: 'reaccion',
-                texto: reaction.text || "",
-                idOriginal: reaction.key.id,
-                remitente: msg.key.fromMe ? 'me' : 'other' // ◄ ¡NUEVO! Le decimos al CRM de quién es
+                tipo: 'reaccion', 
+                texto: emoji, 
+                idOriginal: targetId, 
+                remitente: esMia ? 'me' : 'other' // ◄ Le decimos al CRM de quién es
             });
-            return;
+
+            // ▼ GUARDAR REACCIÓN PERMANENTE EN FIREBASE ▼
+            try {
+                const msgsRef = db.collection('user_profiles').doc(email).collection('crm_mensajes');
+                const snapshot = await msgsRef.where('idOriginal', '==', targetId).get();
+                if (!snapshot.empty) {
+                    const doc = snapshot.docs[0];
+                    if (esMia) {
+                        await doc.ref.update({ reaccionMia: emoji || null });
+                    } else {
+                        await doc.ref.update({ reaccionContacto: emoji || null });
+                    }
+                }
+            } catch (e) {}
+
+            return; // ◄ Detenemos la ejecución aquí.
         }
 
         // ▼ (A PARTIR DE AQUÍ SIGUE TU CÓDIGO NORMAL) ▼
@@ -906,14 +926,16 @@ app.get('/api/historial', async (req, res) => {
                 ultimoMensaje.timestamp = data.timestamp; 
             } else {
                 chatArray.push({ 
-                    idOriginal: data.idOriginal || null, // ◄ AÑADE ESTA LÍNEA
+                    idOriginal: data.idOriginal || null,
                     tipo: data.tipo, 
                     texto: data.texto, 
                     hora: data.hora,
                     timestamp: data.timestamp,
                     remitente: data.remitente || null,
                     mediaUrl: data.mediaUrl || null,
-                    mediaType: data.mediaType || null
+                    mediaType: data.mediaType || null,
+                    reaccionMia: data.reaccionMia || null,       // ◄ NUEVO: Carga tu reacción
+                    reaccionContacto: data.reaccionContacto || null // ◄ NUEVO: Carga la reacción del cliente
                 });
             }
 
