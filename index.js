@@ -796,10 +796,13 @@ app.post('/api/send-reaction', async (req, res) => {
 
         const jidReal = formatearJid(numero);
         
+        // ◄ FIX CRÍTICO: Forzamos la conversión a booleano real ►
+        const esMio = (isFromMe === true || isFromMe === "true");
+        
         await whatsappSockLocal.sendMessage(jidReal, {
             react: {
-                text: emoji, // Ej: "❤️" (o "" para borrar)
-                key: { remoteJid: jidReal, id: idMensaje, fromMe: isFromMe }
+                text: emoji, // Si envías "", WhatsApp borrará la reacción
+                key: { remoteJid: jidReal, id: idMensaje, fromMe: esMio }
             }
         });
 
