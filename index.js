@@ -807,6 +807,46 @@ app.post('/send-audio', async (req, res) => {
     }
 });
 
+app.post('/send-document', async (req, res) => {
+    try {
+        const { email, numero, urlDocumento, fileName } = req.body;
+        if (!email) return res.status(400).json({ success: false, message: 'Falta email.' });
+
+        const whatsappSockLocal = sesionesActivas.get(email);
+        if (!whatsappSockLocal) return res.status(401).json({ success: false, message: `Instancia no conectada` });
+
+        const formattedNumber = formatearJid(numero);
+        await whatsappSockLocal.sendPresenceUpdate('composing', formattedNumber);
+
+        const resMedia = await fetch(urlDocumento);
+        const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
+
+        let mimeType = 'application/pdf';
+        if (fileName.endsWith('.doc') || fileName.endsWith('.docx')) mimeType = 'application/msword';
+        if (fileName.endsWith('.xls') || fileName.endsWith('.xlsx')) mimeType = 'application/vnd.ms-excel';
+
+        const msgEnviado = await whatsappSockLocal.sendMessage(formattedNumber, {
+            document: bufferMedia,
+            mimetype: mimeType,
+            fileName: fileName
+        });
+        const msgId = msgEnviado?.key?.id;
+
+        await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
+        await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", fileName, 'out', null, urlDocumento, 'document', msgId);
+
+        io.to(email).emit('nuevo-mensaje', {
+            numero: formattedNumber, nombre: "Usuario Anonimo", texto: fileName,
+            hora: new Date().toISOString(), timestamp: Date.now(),
+            remitente: null, mediaUrl: urlDocumento, mediaType: 'document',
+            tipo: 'out', idOriginal: msgId
+        });
+        res.json({ success: true, message: 'Documento enviado.' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Error: ' + error.message });
+    }
+});
+
 app.post('/api/send-reaction', async (req, res) => {
     try {
         const { email, numero, idMensaje, emoji, isFromMe } = req.body;
