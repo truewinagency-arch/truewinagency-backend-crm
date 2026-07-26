@@ -393,7 +393,28 @@ async function connectToWhatsApp(email) {
         const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
         const messageType = Object.keys(msg.message || {})[0];
 
-        if (['protocolMessage', 'pollUpdateMessage', 'pollCreationMessage', 'senderKeyDistributionMessage'].includes(messageType)) return;
+        if (['pollUpdateMessage', 'pollCreationMessage', 'senderKeyDistributionMessage'].includes(messageType)) return;
+
+        // ▼ DETECTOR DE MENSAJES BORRADOS POR EL CLIENTE ▼
+        if (messageType === 'protocolMessage') {
+            const protocolMsg = msg.message.protocolMessage;
+            if (protocolMsg.type === 0) { // 0 significa "REVOKE" (Borrado)
+                const targetId = protocolMsg.key.id;
+                io.to(email).emit('nuevo-mensaje', { 
+                    numero: msg.key.remoteJid, 
+                    tipo: 'eliminado', 
+                    idOriginal: targetId,
+                    hora: new Date().toISOString()
+                });
+                
+                try {
+                    const msgsRef = db.collection('user_profiles').doc(email).collection('crm_mensajes');
+                    const snapshot = await msgsRef.where('idOriginal', '==', targetId).get();
+                    if (!snapshot.empty) await snapshot.docs[0].ref.update({ texto: "🚫 Este mensaje fue eliminado", mediaUrl: null, mediaType: "deleted" });
+                } catch(e){}
+            }
+            return;
+        }
 
         const tiempoActualUnix = Math.floor(Date.now() / 1000);
         // ✅ Aumentamos el límite a 10 minutos (600 segundos) para perdonar los retrasos del celular
@@ -866,6 +887,40 @@ app.post('/api/send-reaction', async (req, res) => {
                 key: { remoteJid: jidReal, id: idMensaje, fromMe: esMio }
             }
         });
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- BORRAR MENSAJE PARA TODOS ---
+app.post('/api/delete-message', async (req, res) => {
+    try {
+        const { email, numero, idMensaje, isFromMe } = req.body;
+        if (!email || !numero || !idMensaje) return res.status(400).json({ error: "Faltan datos" });
+
+        const whatsappSockLocal = sesionesActivas.get(email);
+        if (!whatsappSockLocal) return res.status(401).json({ error: "Sesión no activa" });
+
+        const jidReal = formatearJid(numero);
+        const esMio = (isFromMe === true || isFromMe === "true");
+
+        // 1. Borrar en Meta (WhatsApp)
+        await whatsappSockLocal.sendMessage(jidReal, {
+            delete: { remoteJid: jidReal, id: idMensaje, fromMe: esMio }
+        });
+
+        // 2. Borrar permanentemente en Firebase
+        const msgsRef = db.collection('user_profiles').doc(email).collection('crm_mensajes');
+        const snapshot = await msgsRef.where('idOriginal', '==', idMensaje).get();
+        if (!snapshot.empty) {
+            await snapshot.docs[0].ref.update({
+                texto: "🚫 Este mensaje fue eliminado",
+                mediaUrl: null,
+                mediaType: "deleted"
+            });
+        }
 
         res.json({ success: true });
     } catch (error) {
