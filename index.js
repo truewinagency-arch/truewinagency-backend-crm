@@ -592,26 +592,22 @@ app.put('/api/contactos/:jid', async (req, res) => {
 // 💬 ENDPOINTS DE ENVÍO MANUALE DE MENSAJES
 // =========================================================================
 
-// --- ENVIAR TEXTO ---
 app.post('/send-text', async (req, res) => {
     const email = req.body.email || req.body.uid;
     const { numero, mensaje, linkData } = req.body; 
     
-    if (!email) {
-        return res.status(400).json({ error: "Falta el parámetro email." });
-    }
+    if (!email) return res.status(400).json({ error: "Falta el parámetro email." });
 
     const whatsappSockLocal = sesionesActivas.get(email);
-    if (!whatsappSockLocal) {
-        return res.status(401).json({ error: "Tu sesión de WhatsApp no está activa." });
-    }
+    if (!whatsappSockLocal) return res.status(401).json({ error: "Tu sesión de WhatsApp no está activa." });
 
     try {
         const mensajeFinal = typeof procesarSpintax === 'function' ? procesarSpintax(mensaje) : mensaje;
         const jidReal = formatearJid(numero);
+        let msgId = null; // ◄ Variable para guardar el ID oficial
 
         if (linkData && linkData.url) {
-            await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal);
+            msgId = await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal);
         } else {
             const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
             const urls = mensajeFinal.match(urlRegex);
@@ -619,13 +615,15 @@ app.post('/send-text', async (req, res) => {
             if (urls && urls.length > 0) {
                 const linkDetectado = urls[0];
                 const linkDataInfo = await extraerMetadatos(linkDetectado);
-                await enviarTarjetaEnlace(jidReal, mensajeFinal, linkDataInfo, whatsappSockLocal);
+                msgId = await enviarTarjetaEnlace(jidReal, mensajeFinal, linkDataInfo, whatsappSockLocal);
             } else {
-                await whatsappSockLocal.sendMessage(jidReal, { text: mensajeFinal });
+                const msgEnviado = await whatsappSockLocal.sendMessage(jidReal, { text: mensajeFinal });
+                msgId = msgEnviado?.key?.id; // ◄ CAPTURAMOS EL ID
             }
         }
 
-        await guardarMensajeBD(email, numero, "Usuario Anonimo", mensajeFinal, 'out');
+        // ◄ PASAMOS EL ID A LA BASE DE DATOS ►
+        await guardarMensajeBD(email, numero, "Usuario Anonimo", mensajeFinal, 'out', null, null, null, msgId);
         
         io.to(email).emit('nuevo-mensaje', { 
             numero: numero, 
@@ -636,12 +634,12 @@ app.post('/send-text', async (req, res) => {
             remitente: null,
             mediaUrl: null,
             mediaType: null,
-            tipo: 'out' 
+            tipo: 'out',
+            idOriginal: msgId // ◄ SE LO MANDAMOS AL CRM EN KOTLIN
         });
 
         res.json({ success: true });
     } catch (error) {
-        console.error("Fallo al enviar texto manual:", error);
         res.status(500).json({ error: "Fallo al enviar texto: " + error.message });
     }
 });
@@ -657,41 +655,38 @@ app.post('/send-image', async (req, res) => {
         const whatsappSockLocal = sesionesActivas.get(email);
         if (!whatsappSockLocal) return res.status(401).json({ success: false, message: `Instancia no conectada para ${email}` });
 
-        if (!numero || !urlImagen) return res.status(400).json({ success: false, message: 'Número y urlImagen requeridos.' });
-
         const formattedNumber = formatearJid(numero);
         const captionFinal = typeof procesarSpintax === 'function' ? procesarSpintax(caption) : caption;
 
         await whatsappSockLocal.sendPresenceUpdate('composing', formattedNumber);
         
-        // 🚀 DESCARGA EN RAM: Garantiza que la imagen fluya desde Firebase Storage a Meta
         const resMedia = await fetch(urlImagen);
         const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
 
-        await whatsappSockLocal.sendMessage(formattedNumber, {
+        const msgEnviado = await whatsappSockLocal.sendMessage(formattedNumber, {
             image: bufferMedia,
             caption: captionFinal || ''
         });
+        const msgId = msgEnviado?.key?.id; // ◄ CAPTURA ID
 
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
-        const textoMensaje = captionFinal || '';
-        await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", textoMensaje, 'out', null, urlImagen, 'image');
+        await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", captionFinal || '', 'out', null, urlImagen, 'image', msgId);
 
         io.to(email).emit('nuevo-mensaje', {
             numero: formattedNumber,
             nombre: "Usuario Anonimo",
-            texto: textoMensaje,
+            texto: captionFinal || '',
             hora: new Date().toISOString(),
             timestamp: Date.now(),
             remitente: null,
             mediaUrl: urlImagen, 
             mediaType: 'image',
-            tipo: 'out'
+            tipo: 'out',
+            idOriginal: msgId // ◄ EMITE ID
         });
         res.json({ success: true, message: 'Imagen enviada con éxito.' });
     } catch (error) {
-        console.error('Error al enviar la imagen:', error);
         res.status(500).json({ success: false, message: 'Error al enviar imagen: ' + error.message });
     }
 });
@@ -705,44 +700,42 @@ app.post('/send-video', async (req, res) => {
         if (!email) return res.status(400).json({ success: false, message: 'Falta email.' });
 
         const whatsappSockLocal = sesionesActivas.get(email);
-        if (!whatsappSockLocal) return res.status(401).json({ success: false, message: `Instancia no conectada para ${email}` });
-
-        if (!numero || !urlVideo) return res.status(400).json({ success: false, message: 'Número y urlVideo requeridos.' });
+        if (!whatsappSockLocal) return res.status(401).json({ success: false, message: `Instancia no conectada` });
 
         const formattedNumber = formatearJid(numero);
         const captionFinal = typeof procesarSpintax === 'function' ? procesarSpintax(caption) : caption;
 
         await whatsappSockLocal.sendPresenceUpdate('composing', formattedNumber);
 
-        // 🚀 EL TRUCO QUE SALVÓ LAS AUTOMATIZACIONES: Descargar y forzar el buffer
         const resMedia = await fetch(urlVideo);
         const bufferMedia = Buffer.from(await resMedia.arrayBuffer());
 
-        await whatsappSockLocal.sendMessage(formattedNumber, {
+        const msgEnviado = await whatsappSockLocal.sendMessage(formattedNumber, {
             video: bufferMedia,
             caption: captionFinal || '',
-            mimetype: 'video/mp4' // 🚀 Sello obligatorio anti-imagen rota
+            mimetype: 'video/mp4' 
         });
+        const msgId = msgEnviado?.key?.id; // ◄ CAPTURA ID
 
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
-        const textoMensaje = captionFinal || '';
-        await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", textoMensaje, 'out', null, urlVideo, 'video');
+        await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", captionFinal || '', 'out', null, urlVideo, 'video', msgId);
 
         io.to(email).emit('nuevo-mensaje', {
             numero: formattedNumber,
             nombre: "Usuario Anonimo",
-            texto: textoMensaje,
+            texto: captionFinal || '',
             hora: new Date().toISOString(),
             timestamp: Date.now(),
             remitente: null,
             mediaUrl: urlVideo,
             mediaType: 'video',
-            tipo: 'out'
+            tipo: 'out',
+            idOriginal: msgId // ◄ EMITE ID
         });
-        res.json({ success: true, message: 'Video enviado con éxito.' });
+        res.json({ success: true, message: 'Video enviado.' });
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Error al enviar video: ' + error.message });
+        res.status(500).json({ success: false, message: 'Error: ' + error.message });
     }
 });
 
@@ -755,46 +748,41 @@ app.post('/send-audio', async (req, res) => {
         if (!email) return res.status(400).json({ success: false, message: 'Falta email.' });
 
         const whatsappSockLocal = sesionesActivas.get(email);
-        if (!whatsappSockLocal) return res.status(401).json({ success: false, message: `Instancia no conectada para ${email}` });
-
-        if (!numero || !urlAudio) return res.status(400).json({ success: false, message: 'Número y urlAudio requeridos.' });
+        if (!whatsappSockLocal) return res.status(401).json({ success: false, message: `Instancia no conectada` });
 
         const formattedNumber = formatearJid(numero);
-
-        // ▼ 1. GENERADOR DEL DIAGRAMA DE ONDAS ▼
-        // Crea 40 picos simulando los altos y bajos naturales de la voz humana
         const waveData = Array.from({ length: 40 }, () => Math.floor(Math.random() * 70) + 15);
         const waveformArray = new Uint8Array(waveData);
 
         await whatsappSockLocal.sendPresenceUpdate('recording', formattedNumber);
         
-        // ▼ 2. ENVIAMOS EL AUDIO CON EL DIAGRAMA INCLUIDO ▼
-        await whatsappSockLocal.sendMessage(formattedNumber, {
+        const msgEnviado = await whatsappSockLocal.sendMessage(formattedNumber, {
             audio: { url: urlAudio },
             mimetype: 'audio/ogg; codecs=opus',
             ptt: true,
-            waveform: waveformArray // ◄ ¡WhatsApp usará esto para dibujar las barritas!
+            waveform: waveformArray
         });
+        const msgId = msgEnviado?.key?.id; // ◄ CAPTURA ID
 
         await whatsappSockLocal.sendPresenceUpdate('paused', formattedNumber);
 
-        const textoMensaje = ''; 
-        await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", textoMensaje, 'out', null, urlAudio, 'audio');
+        await guardarMensajeBD(email, formattedNumber, "Usuario Anonimo", '', 'out', null, urlAudio, 'audio', msgId);
 
         io.to(email).emit('nuevo-mensaje', {
             numero: formattedNumber,
             nombre: "Usuario Anonimo",
-            texto: textoMensaje,
+            texto: '',
             hora: new Date().toISOString(),
             timestamp: Date.now(),
             remitente: null,
             mediaUrl: urlAudio,
             mediaType: 'audio',
-            tipo: 'out'
+            tipo: 'out',
+            idOriginal: msgId // ◄ EMITE ID
         });
-        res.json({ success: true, message: 'Audio enviado con éxito.' });
+        res.json({ success: true, message: 'Audio enviado.' });
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Error al enviar audio: ' + error.message });
+        res.status(500).json({ success: false, message: 'Error: ' + error.message });
     }
 });
 
@@ -1201,6 +1189,9 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
     }, { userJid: whatsappSockLocal.user.id });
 
     await whatsappSockLocal.relayMessage(jidReal, mensajeProtobuf.message, { messageId: mensajeProtobuf.key.id });
+    
+    // ◄ FIX: AHORA DEVOLVEMOS EL ID REAL DE WHATSAPP ►
+    return mensajeProtobuf.key.id; 
 }
 
 // =========================================================================
@@ -1310,16 +1301,15 @@ async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLo
             let textoOriginal = msj.texto || ""; 
             let mUrl = msj.url || null; 
             let mType = null;
-            const jidReal = formatearJid(numeroDestino); //
+            const jidReal = formatearJid(numeroDestino);
             let textoBurbuja = (msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace') ? procesarSpintax(textoOriginal) : textoOriginal;
+            let msgId = null; // ◄ CAPTURADOR PARA EL BOT
 
             try {
                 if (msj.tipo === 'audio') {
-                    // 🚀 CORREGIDO: Usar jidReal en lugar de numeroDestino
                     await whatsappSockLocal.sendPresenceUpdate('recording', jidReal);
                     await pause(4000); 
                 } else {
-                    // 🚀 CORREGIDO: Usar jidReal en lugar de numeroDestino
                     await whatsappSockLocal.sendPresenceUpdate('composing', jidReal);
                     const caracteres = textoBurbuja ? textoBurbuja.length : 20;
                     let tiempoTipeo = Math.max(1200, Math.min((caracteres * Math.floor(Math.random() * (55 - 25 + 1)) + 25) + Math.floor(Math.random() * (800 - 300 + 1)) + 300, 6500));
@@ -1332,9 +1322,10 @@ async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLo
                 const urls = textoBurbuja.match(urlRegex);
                 if (urls && urls.length > 0) {
                     const linkDataInfo = await extraerMetadatos(urls[0]);
-                    await enviarTarjetaEnlace(jidReal, textoBurbuja, linkDataInfo, whatsappSockLocal);
+                    msgId = await enviarTarjetaEnlace(jidReal, textoBurbuja, linkDataInfo, whatsappSockLocal);
                 } else {
-                    await whatsappSockLocal.sendMessage(jidReal, { text: textoBurbuja });
+                    const msgEnviado = await whatsappSockLocal.sendMessage(jidReal, { text: textoBurbuja });
+                    msgId = msgEnviado?.key?.id;
                 }
             } else if (msj.tipo === 'media' && msj.url) {
                 try {
@@ -1344,34 +1335,35 @@ async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLo
 
                     if (contentType.includes('video') || msj.url.toLowerCase().includes('.mp4') || msj.url.toLowerCase().includes('.mov')) {
                         mType = 'video';
-                        await whatsappSockLocal.sendMessage(jidReal, { video: bufferMedia, caption: textoBurbuja || "[Video enviado]", mimetype: 'video/mp4' });
+                        const msgEnviado = await whatsappSockLocal.sendMessage(jidReal, { video: bufferMedia, caption: textoBurbuja || "[Video enviado]", mimetype: 'video/mp4' });
+                        msgId = msgEnviado?.key?.id;
                     } else {
                         mType = 'image';
-                        await whatsappSockLocal.sendMessage(jidReal, { image: bufferMedia, caption: textoBurbuja || "[Imagen enviada]" });
+                        const msgEnviado = await whatsappSockLocal.sendMessage(jidReal, { image: bufferMedia, caption: textoBurbuja || "[Imagen enviada]" });
+                        msgId = msgEnviado?.key?.id;
                     }
                 } catch (error) { 
-                    console.error("[Bot Nube] Error enviando archivo multimedia:", error);
+                    console.error("[Bot Nube] Error enviando multimedia:", error);
                 }
             } else if (msj.tipo === 'audio' && msj.url) {
                 mType = 'audio';
-
-                // ▼ "CONVERSOR" VISUAL: Generador de ondas para las secuencias ▼
                 const waveData = Array.from({ length: 40 }, () => Math.floor(Math.random() * 70) + 15);
                 const waveformArray = new Uint8Array(waveData);
 
-                await whatsappSockLocal.sendMessage(jidReal, { 
+                const msgEnviado = await whatsappSockLocal.sendMessage(jidReal, { 
                     audio: { url: msj.url }, 
                     mimetype: 'audio/ogg; codecs=opus', 
                     ptt: true,
-                    waveform: waveformArray // ◄ Inyectamos el diagrama al flujo
+                    waveform: waveformArray
                 });
+                msgId = msgEnviado?.key?.id;
             }
 
             try { await whatsappSockLocal.sendPresenceUpdate('paused', jidReal); } catch (e) {}
 
-            await guardarMensajeBD(email, numeroDestino, "Usuario Anonimo", textoBurbuja, 'out', null, mUrl, mType);
+            // ◄ GUARDAMOS EL ID REAL EN EL HISTORIAL ►
+            await guardarMensajeBD(email, numeroDestino, "Usuario Anonimo", textoBurbuja, 'out', null, mUrl, mType, msgId);
 
-            // 🚀 EMISIÓN POR SALA PRIVADA IDENTIFICADA POR EMAIL
             io.to(email).emit('nuevo-mensaje', { 
                 numero: numeroDestino, 
                 nombre: "Usuario Anonimo", 
@@ -1381,7 +1373,8 @@ async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLo
                 remitente: null, 
                 mediaUrl: mUrl, 
                 mediaType: mType, 
-                tipo: 'out' 
+                tipo: 'out',
+                idOriginal: msgId // ◄ ENVIAMOS EL ID REAL
             });
 
             await pause(Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500);
