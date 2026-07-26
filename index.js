@@ -48,14 +48,11 @@ const Jimp = require('jimp');
 const sharp = require('sharp');
 
 // 🚀 GUARDAR MENSAJE EN BASE DE DATOS
-async function guardarMensajeBD(email, numero, nombre, texto, tipo, remitente = null, mediaUrl = null, mediaType = null) {
+async function guardarMensajeBD(email, numero, nombre, texto, tipo, remitente = null, mediaUrl = null, mediaType = null, idOriginal = null) {
     try {
-        if (!email) {
-            console.error("Error: Se intentó guardar un mensaje sin proporcionar el email del usuario.");
-            return; 
-        }
-
+        if (!email) return; 
         await getColeccionMensajes(email).add({
+            idOriginal: idOriginal || null, // ◄ GUARDAMOS EL ID REAL AQUÍ
             numero: numero,
             nombre: nombre || "Desconocido",
             texto: texto,
@@ -66,9 +63,7 @@ async function guardarMensajeBD(email, numero, nombre, texto, tipo, remitente = 
             hora: new Date().toISOString(),
             timestamp: Date.now() 
         });
-    } catch (error) {
-        console.error(`Error guardando mensaje en historial para el usuario ${email}:`, error);
-    }
+    } catch (error) {}
 }
 
 // 🚀 REGISTRAR CONTACTO INTELIGENTE
@@ -450,7 +445,7 @@ async function connectToWhatsApp(email) {
             }
         }
         
-    await guardarMensajeBD(email, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType);
+    await guardarMensajeBD(email, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType, msg.key.id);
 
         // 🚀 AQUÍ ESTÁ LA MAGIA QUE FALTABA: Despertar al bot si el mensaje es del cliente
         if (tipoMensaje === 'in') {
@@ -463,10 +458,12 @@ async function connectToWhatsApp(email) {
             nombre: nombrePerfil, 
             texto: texto, 
             hora: new Date().toISOString(),
+            timestamp: Date.now(),
             remitente: remitenteEspecifico,
             mediaUrl: mediaUrl,
             mediaType: mediaType,
-            tipo: tipoMensaje
+            tipo: tipoMensaje,
+            idOriginal: msg.key.id // ◄ ENVIAMOS EL ID REAL AL CELULAR
         });
     });
 
@@ -917,6 +914,7 @@ app.get('/api/historial', async (req, res) => {
                 ultimoMensaje.timestamp = data.timestamp; 
             } else {
                 chatArray.push({ 
+                    idOriginal: data.idOriginal || null, // ◄ AÑADE ESTA LÍNEA
                     tipo: data.tipo, 
                     texto: data.texto, 
                     hora: data.hora,
