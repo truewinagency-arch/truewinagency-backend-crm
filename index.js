@@ -789,7 +789,7 @@ app.post('/send-audio', async (req, res) => {
 // --- DESPACHAR SECUENCIA MANUALMENTE CON LÓGICA HUMANA ---
 app.post('/api/despachar-secuencia-manual', async (req, res) => {
     try {
-        const { email, numero, secuencia } = req.body;
+        const { email, numero, secuencia, idPlantilla } = req.body; // ◄ Recibimos el ID
 
         if (!email || !numero || !secuencia) {
             return res.status(400).json({ success: false, message: 'Faltan datos requeridos.' });
@@ -800,10 +800,19 @@ app.post('/api/despachar-secuencia-manual', async (req, res) => {
 
         const formattedNumber = formatearJid(numero);
 
-        // Simulamos la estructura de la plantilla que el motor inteligente espera
-        const tpl = { secuencia: secuencia };
+        // ▼ NUEVO: REGISTRO CENTRAL DE ENVÍOS MANUALES ▼
+        if (idPlantilla) {
+            const idLogEnvio = `${idPlantilla}_${formattedNumber.replace(/[^a-zA-Z0-9]/g, '')}`;
+            // Guardamos que esta secuencia ya fue enviada a este número
+            db.collection('user_profiles').doc(email).collection('crm_registro_envios').doc(idLogEnvio).set({
+                idPlantilla: idPlantilla,
+                numeroCliente: formattedNumber,
+                ejecutadoEl: new Date().toISOString(),
+                tipoEnvio: 'manual'
+            }).catch(e => console.error("Error guardando log manual:", e));
+        }
 
-        // 🚀 Disparamos la función de la nube en segundo plano (sin await para no bloquear tu app)
+        const tpl = { secuencia: secuencia };
         despacharFlujoDesdeNube(email, formattedNumber, tpl, whatsappSockLocal);
 
         res.json({ success: true, message: 'Secuencia inteligente iniciada.' });
@@ -1162,9 +1171,14 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
 // 🤖 MOTOR DE EVALUACIÓN Y DESPACHO EN NUBE
 // =========================================================================
 
+// =========================================================================
+// 🤖 MOTOR DE EVALUACIÓN Y DESPACHO EN NUBE
+// =========================================================================
+
 async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSockLocal) {
     if (!textoMensaje || !whatsappSockLocal || !email) return;
     const textoLimpio = textoMensaje.toLowerCase().trim();
+    const esGrupo = numeroCliente.endsWith('@g.us'); // ◄ Detectamos si es grupo
 
     try {
         const configDoc = await db.collection('user_profiles').doc(email).collection('crm_config').doc('automatizaciones').get();
@@ -1175,6 +1189,10 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
         autosSnapshot.forEach(doc => automatizaciones.push(doc.data()));
 
         for (const auto of automatizaciones) {
+            
+            // 🛑 REGLA 1: GRUPOS (Si es grupo y el switch está apagado, la ignoramos)
+            if (esGrupo && !auto.ejecutarEnGrupos) continue;
+
             const arrayKeywords = auto.palabraClave.split(',').map(k => k.toLowerCase().trim()).filter(k => k);
             let haceMatch = false;
 
@@ -1184,6 +1202,19 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
             }
 
             if (haceMatch) {
+                
+                // 🛑 REGLA 2: OMITIR SI YA FUE ENVIADA (Manual o Bot)
+                if (auto.omitirSiYaEnviado) {
+                    const idLogEnvio = `${auto.idPlantilla}_${numeroCliente.replace(/[^a-zA-Z0-9]/g, '')}`;
+                    const logEnvioDoc = await db.collection('user_profiles').doc(email).collection('crm_registro_envios').doc(idLogEnvio).get();
+                    
+                    if (logEnvioDoc.exists) {
+                        console.log(`[Bot] 🛑 Secuencia omitida para ${numeroCliente} (Regla: Ya fue enviada previamente)`);
+                        break; // Aborta la automatización actual
+                    }
+                }
+
+                // Lógica original de Frecuencia Única
                 if (auto.frecuencia === 'unica') {
                     const idLogUnico = `${auto.id}_${numeroCliente.replace(/[^a-zA-Z0-9]/g, '')}`;
                     const registroDoc = await db.collection('user_profiles').doc(email).collection('crm_registro_bot').doc(idLogUnico).get();
@@ -1198,12 +1229,27 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                     });
                 }
 
+                // 🔔 REGLA 3: NOTIFICACIÓN PUSH (Preparado para el futuro)
+                if (auto.activarNotificacion) {
+                    // TODO: Aquí integraremos Firebase Cloud Messaging (FCM) 
+                    console.log(`🔔 [FCM PENDIENTE] Generar notificación PUSH en el celular para el chat: ${numeroCliente}`);
+                }
+
+                // ▼ REGISTRO CENTRAL DE ENVÍOS (Para que la regla 'Omitir' funcione en el futuro) ▼
+                if (auto.idPlantilla) {
+                    const idLogEnvio = `${auto.idPlantilla}_${numeroCliente.replace(/[^a-zA-Z0-9]/g, '')}`;
+                    db.collection('user_profiles').doc(email).collection('crm_registro_envios').doc(idLogEnvio).set({
+                        idPlantilla: auto.idPlantilla,
+                        numeroCliente: numeroCliente,
+                        ejecutadoEl: new Date().toISOString(),
+                        tipoEnvio: 'bot'
+                    }).catch(e => {});
+                }
+
                 const tiempoLecturaHumana = Math.floor(Math.random() * (3500 - 1500 + 1)) + 1500;
                 setTimeout(async () => {
                     if (ultimosMensajesKey[email] && ultimosMensajesKey[email][numeroCliente]) {
-                        try { 
-                            await whatsappSockLocal.readMessages([ultimosMensajesKey[email][numeroCliente]]); 
-                        } catch (e) { }
+                        try { await whatsappSockLocal.readMessages([ultimosMensajesKey[email][numeroCliente]]); } catch (e) { }
                     }
                 }, tiempoLecturaHumana);
 
