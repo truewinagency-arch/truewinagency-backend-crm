@@ -362,7 +362,19 @@ async function connectToWhatsApp(email) {
         const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
         const messageType = Object.keys(msg.message || {})[0];
 
-        if (['protocolMessage', 'pollUpdateMessage', 'pollCreationMessage', 'reactionMessage', 'senderKeyDistributionMessage'].includes(messageType)) return;
+        if (['protocolMessage', 'pollUpdateMessage', 'pollCreationMessage', 'senderKeyDistributionMessage'].includes(messageType)) return;
+
+        // ▼ INTERCEPTOR DE REACCIONES (EMOJIS) ▼
+        if (messageType === 'reactionMessage') {
+            const reaction = msg.message.reactionMessage;
+            io.to(email).emit('nuevo-mensaje', { 
+                numero: msg.key.remoteJid, 
+                tipo: 'reaccion', // ◄ Etiqueta especial
+                texto: reaction.text, // El emoji (Si viene vacío "", es que quitaron la reacción)
+                idOriginal: reaction.key.id // El ID del mensaje al que reaccionaron
+            });
+            return; // ◄ Detenemos la ejecución aquí para que no intente guardar un mensaje de texto
+        }
 
         const tiempoActualUnix = Math.floor(Date.now() / 1000);
         // ✅ Aumentamos el límite a 10 minutos (600 segundos) para perdonar los retrasos del celular
@@ -783,6 +795,29 @@ app.post('/send-audio', async (req, res) => {
         res.json({ success: true, message: 'Audio enviado con éxito.' });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Error al enviar audio: ' + error.message });
+    }
+});
+
+app.post('/api/send-reaction', async (req, res) => {
+    try {
+        const { email, numero, idMensaje, emoji, isFromMe } = req.body;
+        if (!email || !numero || !idMensaje) return res.status(400).json({ error: "Faltan datos" });
+
+        const whatsappSockLocal = sesionesActivas.get(email);
+        if (!whatsappSockLocal) return res.status(401).json({ error: "Sesión no activa" });
+
+        const jidReal = formatearJid(numero);
+        
+        await whatsappSockLocal.sendMessage(jidReal, {
+            react: {
+                text: emoji, // Ej: "❤️" (o "" para borrar)
+                key: { remoteJid: jidReal, id: idMensaje, fromMe: isFromMe }
+            }
+        });
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 
