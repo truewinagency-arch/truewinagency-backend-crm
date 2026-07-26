@@ -361,11 +361,12 @@ async function connectToWhatsApp(email) {
             const reaction = msg.message.reactionMessage;
             io.to(email).emit('nuevo-mensaje', { 
                 numero: msg.key.remoteJid, 
-                tipo: 'reaccion', // ◄ Etiqueta especial
-                texto: reaction.text || "", // El emoji (Si viene vacío "", es que quitaron la reacción)
-                idOriginal: reaction.key.id // El ID del mensaje al que reaccionaron
+                tipo: 'reaccion',
+                texto: reaction.text || "",
+                idOriginal: reaction.key.id,
+                remitente: msg.key.fromMe ? 'me' : 'other' // ◄ ¡NUEVO! Le decimos al CRM de quién es
             });
-            return; // ◄ ¡MUY IMPORTANTE! Detenemos la ejecución aquí. NUNCA pasará a la BD.
+            return;
         }
 
         // ▼ (A PARTIR DE AQUÍ SIGUE TU CÓDIGO NORMAL) ▼
