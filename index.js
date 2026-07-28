@@ -490,9 +490,7 @@ async function connectToWhatsApp(email) {
     await guardarMensajeBD(email, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType, msg.key.id);
 
         // 🚀 AQUÍ ESTÁ LA MAGIA QUE FALTABA: Despertar al bot si el mensaje es del cliente
-        if (tipoMensaje === 'in') {
-           procesarBotEnNube(email, identificador, texto, whatsappSock, tipoMensaje);
-        }
+       procesarBotEnNube(email, identificador, texto, whatsappSock, tipoMensaje);
 
         // Emite el mensaje al frontend
         io.to(email).emit('nuevo-mensaje', { 
@@ -1332,19 +1330,11 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
     return mensajeProtobuf.key.id; 
 }
 
-// =========================================================================
-// 🤖 MOTOR DE EVALUACIÓN Y DESPACHO EN NUBE
-// =========================================================================
-
-// =========================================================================
-// 🤖 MOTOR DE EVALUACIÓN Y DESPACHO EN NUBE
-// =========================================================================
-
 async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSockLocal, tipoMensaje) {
     if (!textoMensaje || !whatsappSockLocal || !email) return;
     const textoLimpio = textoMensaje.toLowerCase().trim();
     const esGrupo = numeroCliente.endsWith('@g.us'); 
-    const esMio = (tipoMensaje === 'out'); // ◄ NUEVO: El bot ahora sabe si el mensaje es tuyo
+    const esMio = (tipoMensaje === 'out'); // ◄ Detectamos si el mensaje lo enviaste tú
 
     try {
         const configDoc = await db.collection('user_profiles').doc(email).collection('crm_config').doc('automatizaciones').get();
@@ -1357,14 +1347,15 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
         for (const auto of automatizaciones) {
             
             // 🛑 REGLA 0: ¿Quién dispara esta regla?
-            const disparador = auto.disparador || 'cliente'; // Por defecto es el cliente
+            const disparador = auto.disparador || 'cliente'; // Por defecto protege a los viejos como "cliente"
             let tienePermiso = false;
             
             if (disparador === 'cliente' && !esMio) tienePermiso = true;
             if (disparador === 'yo' && esMio) tienePermiso = true;
             if (disparador === 'ambos') tienePermiso = true;
 
-            if (!tienePermiso) continue; // ◄ Si no tienes permiso, salta a la siguiente regla
+            // Si no tiene permiso de activar esta regla específica, pasa a la siguiente
+            if (!tienePermiso) continue;
 
             // 🛑 REGLA 1: GRUPOS (Si es grupo y el switch está apagado, la ignoramos)
             if (esGrupo && !auto.ejecutarEnGrupos) continue;
@@ -1386,11 +1377,11 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                     
                     if (logEnvioDoc.exists) {
                         console.log(`[Bot] 🛑 Secuencia omitida para ${numeroCliente} (Regla: Ya fue enviada previamente)`);
-                        break; // Aborta la automatización actual
+                        break; 
                     }
                 }
 
-                // Lógica original de Frecuencia Única
+                // Lógica de Frecuencia Única
                 if (auto.frecuencia === 'unica') {
                     const idLogUnico = `${auto.id}_${numeroCliente.replace(/[^a-zA-Z0-9]/g, '')}`;
                     const registroDoc = await db.collection('user_profiles').doc(email).collection('crm_registro_bot').doc(idLogUnico).get();
@@ -1405,13 +1396,11 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                     });
                 }
 
-                // 🔔 REGLA 3: NOTIFICACIÓN PUSH (Preparado para el futuro)
                 if (auto.activarNotificacion) {
-                    // TODO: Aquí integraremos Firebase Cloud Messaging (FCM) 
                     console.log(`🔔 [FCM PENDIENTE] Generar notificación PUSH en el celular para el chat: ${numeroCliente}`);
                 }
 
-                // ▼ REGISTRO CENTRAL DE ENVÍOS (Para que la regla 'Omitir' funcione en el futuro) ▼
+                // REGISTRO CENTRAL DE ENVÍOS
                 if (auto.idPlantilla) {
                     const idLogEnvio = `${auto.idPlantilla}_${numeroCliente.replace(/[^a-zA-Z0-9]/g, '')}`;
                     db.collection('user_profiles').doc(email).collection('crm_registro_envios').doc(idLogEnvio).set({
@@ -1563,7 +1552,5 @@ function procesarSpintax(texto) {
     }
     return textoString;
 }
-
-
 
 iniciarEcosistema();
