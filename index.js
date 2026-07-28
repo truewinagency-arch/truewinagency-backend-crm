@@ -636,7 +636,8 @@ app.put('/api/contactos/:jid', async (req, res) => {
 
 app.post('/send-text', async (req, res) => {
     const email = req.body.email || req.body.uid;
-    const { numero, mensaje, linkData } = req.body; 
+    // ◄ 1. AÑADIMOS LAS VARIABLES DE RESPUESTA AQUÍ ►
+    const { numero, mensaje, linkData, replyToId, replyToTexto, replyToEsMio } = req.body; 
     
     if (!email) return res.status(400).json({ error: "Falta el parámetro email." });
 
@@ -647,6 +648,15 @@ app.post('/send-text', async (req, res) => {
         const mensajeFinal = typeof procesarSpintax === 'function' ? procesarSpintax(mensaje) : mensaje;
         const jidReal = formatearJid(numero);
         let msgId = null; // ◄ Variable para guardar el ID oficial
+
+        // ▼ 2. CONSTRUCTOR DE CITA PARA WHATSAPP (QUOTED MESSAGE) ▼
+        let opcionesContexto = {};
+        if (replyToId) {
+            opcionesContexto.quoted = {
+                key: { remoteJid: jidReal, id: replyToId, fromMe: replyToEsMio === true },
+                message: { conversation: replyToTexto || "Mensaje" }
+            };
+        }
 
         if (linkData && linkData.url) {
             msgId = await enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSockLocal);
@@ -659,7 +669,8 @@ app.post('/send-text', async (req, res) => {
                 const linkDataInfo = await extraerMetadatos(linkDetectado);
                 msgId = await enviarTarjetaEnlace(jidReal, mensajeFinal, linkDataInfo, whatsappSockLocal);
             } else {
-                const msgEnviado = await whatsappSockLocal.sendMessage(jidReal, { text: mensajeFinal });
+                // ◄ 3. FIX CRÍTICO: PASAMOS 'opcionesContexto' AL FINAL DEL SENDMESSAGE ►
+                const msgEnviado = await whatsappSockLocal.sendMessage(jidReal, { text: mensajeFinal }, opcionesContexto);
                 msgId = msgEnviado?.key?.id; // ◄ CAPTURAMOS EL ID
             }
         }
