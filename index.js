@@ -688,7 +688,13 @@ app.post('/send-text', async (req, res) => {
             mediaUrl: null,
             mediaType: null,
             tipo: 'out',
-            idOriginal: msgId // ◄ SE LO MANDAMOS AL CRM EN KOTLIN
+            idOriginal: msgId,
+            // ◄ ENVIAMOS LOS DATOS DE CITA AL CELULAR ►
+            replyToId: replyToId || null,
+            replyToTexto: replyToTexto || null,
+            replyToRemitente: replyToId ? (replyToEsMio === true ? "Tú" : "Contacto") : null,
+            replyToMediaType: null,
+            replyToMediaUrl: null
         });
 
         res.json({ success: true });
