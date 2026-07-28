@@ -491,7 +491,7 @@ async function connectToWhatsApp(email) {
 
         // 🚀 AQUÍ ESTÁ LA MAGIA QUE FALTABA: Despertar al bot si el mensaje es del cliente
         if (tipoMensaje === 'in') {
-            procesarBotEnNube(email, identificador, texto, whatsappSock);
+            procesarBotEnNube(email, identificador, texto, whatsappSockLocal, tipoMensaje);
         }
 
         // Emite el mensaje al frontend
@@ -1340,10 +1340,11 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
 // 🤖 MOTOR DE EVALUACIÓN Y DESPACHO EN NUBE
 // =========================================================================
 
-async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSockLocal) {
+async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSockLocal, tipoMensaje) {
     if (!textoMensaje || !whatsappSockLocal || !email) return;
     const textoLimpio = textoMensaje.toLowerCase().trim();
-    const esGrupo = numeroCliente.endsWith('@g.us'); // ◄ Detectamos si es grupo
+    const esGrupo = numeroCliente.endsWith('@g.us'); 
+    const esMio = (tipoMensaje === 'out'); // ◄ NUEVO: El bot ahora sabe si el mensaje es tuyo
 
     try {
         const configDoc = await db.collection('user_profiles').doc(email).collection('crm_config').doc('automatizaciones').get();
@@ -1355,9 +1356,18 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
 
         for (const auto of automatizaciones) {
             
+            // 🛑 REGLA 0: ¿Quién dispara esta regla?
+            const disparador = auto.disparador || 'cliente'; // Por defecto es el cliente
+            let tienePermiso = false;
+            
+            if (disparador === 'cliente' && !esMio) tienePermiso = true;
+            if (disparador === 'yo' && esMio) tienePermiso = true;
+            if (disparador === 'ambos') tienePermiso = true;
+
+            if (!tienePermiso) continue; // ◄ Si no tienes permiso, salta a la siguiente regla
+
             // 🛑 REGLA 1: GRUPOS (Si es grupo y el switch está apagado, la ignoramos)
             if (esGrupo && !auto.ejecutarEnGrupos) continue;
-
             const arrayKeywords = auto.palabraClave.split(',').map(k => k.toLowerCase().trim()).filter(k => k);
             let haceMatch = false;
 
