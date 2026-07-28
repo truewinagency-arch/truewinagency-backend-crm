@@ -491,7 +491,7 @@ async function connectToWhatsApp(email) {
 
         // 🚀 AQUÍ ESTÁ LA MAGIA QUE FALTABA: Despertar al bot si el mensaje es del cliente
         if (tipoMensaje === 'in') {
-            procesarBotEnNube(email, identificador, texto, whatsappSockLocal, tipoMensaje);
+           procesarBotEnNube(email, identificador, texto, whatsappSock, tipoMensaje);
         }
 
         // Emite el mensaje al frontend
@@ -1368,6 +1368,7 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
 
             // 🛑 REGLA 1: GRUPOS (Si es grupo y el switch está apagado, la ignoramos)
             if (esGrupo && !auto.ejecutarEnGrupos) continue;
+
             const arrayKeywords = auto.palabraClave.split(',').map(k => k.toLowerCase().trim()).filter(k => k);
             let haceMatch = false;
 
