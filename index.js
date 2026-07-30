@@ -19,7 +19,7 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 
 const { initializeApp, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore'); 
+const { getFirestore, FieldValue } = require('firebase-admin/firestore'); 
 const serviceAccount = require('./firebase-credentials.json');
 
 // =========================================================================
@@ -345,6 +345,40 @@ async function connectToWhatsApp(email) {
             console.log(`[TrueWin] ¡CONEXIÓN ESTABLECIDA PARA: ${email}!`);
             qrActivos.delete(email); 
             io.to(email).emit('estado-conexion', 'conectado'); 
+        }
+    });
+
+    // ▼ 1. ESCUCHAR CREACIÓN O EDICIÓN DE ETIQUETAS (Colores y Nombres) ▼
+    whatsappSock.ev.on('labels.edit', async (label) => {
+        try {
+            const etiquetaRef = db.collection('user_profiles').doc(email).collection('crm_etiquetas').doc(label.id);
+            if (label.deleted) {
+                await etiquetaRef.delete();
+            } else {
+                // Meta guarda el color como un número entero 32-bit. Lo convertimos a Hexadecimal (#RRGGBB)
+                let colorHex = label.color ? `#${(label.color & 0x00FFFFFF).toString(16).padStart(6, '0')}` : "#888888";
+                await etiquetaRef.set({ id: label.id, nombre: label.name, colorHex: colorHex }, { merge: true });
+            }
+        } catch (e) { console.error("Error guardando etiqueta:", e); }
+    });
+
+    // ▼ 2. ESCUCHAR CUANDO LE PONES UNA ETIQUETA A UN CLIENTE ▼
+    whatsappSock.ev.on('labels.association', async (association) => {
+        // 'association' trae { type: 'Chat', action: 'add'/'remove', chatId: '...', labelId: '...' }
+        if (association.type === 'Chat') {
+            try {
+                const jid = association.chatId;
+                const labelId = association.labelId;
+                const contactoRef = getColeccionContactos(email).doc(jid);
+                
+                if (association.action === 'add') {
+                    await contactoRef.update({ etiquetas: FieldValue.arrayUnion(labelId) });
+                } else if (association.action === 'remove') {
+                    await contactoRef.update({ etiquetas: FieldValue.arrayRemove(labelId) });
+                }
+            } catch (e) { 
+                // Silenciamos error si el contacto aún no existe en Firebase
+            }
         }
     });
 
@@ -1093,6 +1127,20 @@ app.post('/api/marcar-visto', async (req, res) => {
     }
 });
 
+app.get('/api/etiquetas', async (req, res) => {
+    try {
+        const { email } = req.query;
+        if (!email) return res.status(401).json({ error: "Falta email" });
+
+        const snapshot = await db.collection('user_profiles').doc(email).collection('crm_etiquetas').get();
+        let etiquetas = [];
+        snapshot.forEach(doc => etiquetas.push(doc.data()));
+        res.json(etiquetas);
+    } catch (error) {
+        res.status(500).json({ error: "Fallo al obtener etiquetas" });
+    }
+});
+
 // Obtiene la foto de perfil del contacto en WhatsApp
 app.get('/api/foto-perfil', async (req, res) => {
     const { jid, email } = req.query;
@@ -1109,6 +1157,8 @@ app.get('/api/foto-perfil', async (req, res) => {
         return res.json({ url: null }); 
     }
 });
+
+
 
 // =====================================================================
 // 🤖 ENDPOINTS PARA EL MOTOR DE AUTOMATIZACIONES
