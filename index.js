@@ -1441,19 +1441,36 @@ async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLo
             let mType = null;
             const jidReal = formatearJid(numeroDestino);
             let textoBurbuja = (msj.tipo === 'texto' || msj.tipo === 'media' || msj.tipo === 'enlace') ? procesarSpintax(textoOriginal) : textoOriginal;
-            let msgId = null; // ◄ CAPTURADOR PARA EL BOT
+            let msgId = null; 
+
+            // ▼ NUEVA LÓGICA DE TIEMPO INTELIGENTE ▼
+            let delayMin = parseInt(msj.delayMin);
+            let delayMax = parseInt(msj.delayMax);
+            let tieneDelayPersonalizado = !isNaN(delayMin) && !isNaN(delayMax) && delayMax >= delayMin;
+
+            let tiempoEsperaTotal = 0;
+
+            if (tieneDelayPersonalizado) {
+                // Rango definido por el usuario convertido a milisegundos
+                tiempoEsperaTotal = Math.floor(Math.random() * ((delayMax * 1000) - (delayMin * 1000) + 1)) + (delayMin * 1000);
+            } else {
+                // Default del Sistema: Basado en la longitud del texto
+                const caracteres = textoBurbuja ? textoBurbuja.length : 20;
+                tiempoEsperaTotal = Math.max(1200, Math.min(((caracteres * 40) + 500) + Math.floor(Math.random() * (800 - 300 + 1)) + 300, 6500));
+            }
 
             try {
-                if (msj.tipo === 'audio') {
-                    await whatsappSockLocal.sendPresenceUpdate('recording', jidReal);
-                    await pause(4000); 
+                // LÓGICA DE HUMANIZACIÓN: Si la espera es muy larga, pausa en silencio antes de "escribir"
+                if (tiempoEsperaTotal > 15000) {
+                    await pause(tiempoEsperaTotal - 6000); // Espera silenciosa (Ej. 4 minutos y 54 segundos)
+                    await whatsappSockLocal.sendPresenceUpdate(msj.tipo === 'audio' ? 'recording' : 'composing', jidReal);
+                    await pause(6000); // 6 segundos falsos de escribir
                 } else {
-                    await whatsappSockLocal.sendPresenceUpdate('composing', jidReal);
-                    const caracteres = textoBurbuja ? textoBurbuja.length : 20;
-                    let tiempoTipeo = Math.max(1200, Math.min((caracteres * Math.floor(Math.random() * (55 - 25 + 1)) + 25) + Math.floor(Math.random() * (800 - 300 + 1)) + 300, 6500));
-                    await pause(tiempoTipeo);
+                    await whatsappSockLocal.sendPresenceUpdate(msj.tipo === 'audio' ? 'recording' : 'composing', jidReal);
+                    await pause(tiempoEsperaTotal);
                 }
             } catch (e) { }
+            // ▲ FIN LÓGICA DE TIEMPO ▲
 
             if (msj.tipo === 'texto') {
                 const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g;
@@ -1512,10 +1529,16 @@ async function despacharFlujoDesdeNube(email, numeroDestino, tpl, whatsappSockLo
                 mediaUrl: mUrl, 
                 mediaType: mType, 
                 tipo: 'out',
-                idOriginal: msgId // ◄ ENVIAMOS EL ID REAL
+                idOriginal: msgId
             });
 
-            await pause(Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500);
+            // ◄ FIX DELAY POST-MENSAJE: Si usó su propio delay, cortamos la pausa genérica del final
+            if (!tieneDelayPersonalizado) {
+                await pause(Math.floor(Math.random() * (5500 - 2500 + 1)) + 2500);
+            } else {
+                await pause(500); // Pausa técnica mínima por seguridad de socket
+            }
+
         } catch (e) {
             console.error("Error disparando pieza del bot en la nube:", e);
         }
