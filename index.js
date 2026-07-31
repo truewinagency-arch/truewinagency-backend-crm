@@ -364,20 +364,21 @@ async function connectToWhatsApp(email) {
 
     // ▼ 2. ESCUCHAR CUANDO LE PONES UNA ETIQUETA A UN CLIENTE ▼
     whatsappSock.ev.on('labels.association', async (association) => {
-        // 'association' trae { type: 'Chat', action: 'add'/'remove', chatId: '...', labelId: '...' }
         if (association.type === 'Chat') {
             try {
                 const jid = association.chatId;
                 const labelId = association.labelId;
                 const contactoRef = getColeccionContactos(email).doc(jid);
                 
+                // ◄ FIX CRÍTICO: Usamos 'set' con 'merge: true' en lugar de 'update'
+                // Esto garantiza que si el cliente es viejo y no estaba en la BD, no crashee.
                 if (association.action === 'add') {
-                    await contactoRef.update({ etiquetas: FieldValue.arrayUnion(labelId) });
+                    await contactoRef.set({ etiquetas: FieldValue.arrayUnion(labelId) }, { merge: true });
                 } else if (association.action === 'remove') {
-                    await contactoRef.update({ etiquetas: FieldValue.arrayRemove(labelId) });
+                    await contactoRef.set({ etiquetas: FieldValue.arrayRemove(labelId) }, { merge: true });
                 }
             } catch (e) { 
-                // Silenciamos error si el contacto aún no existe en Firebase
+                console.error("Error guardando asociación de etiqueta:", e);
             }
         }
     });
