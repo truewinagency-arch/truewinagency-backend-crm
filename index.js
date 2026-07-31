@@ -1450,7 +1450,10 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                             android: {
                                 notification: {
                                     channelId: 'crm_bot_alerts',
-                                    sound: 'sonido_bot'
+                                    sound: 'sonido_bot',
+                                    // ▼ NUEVO: FUERZA EL ICONO Y EL COLOR DORADO ▼
+                                    icon: 'ic_notificacion_bot', 
+                                    color: '#F8A72B' 
                                 }
                             }
                         };
