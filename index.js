@@ -351,35 +351,41 @@ async function connectToWhatsApp(email) {
     // ▼ 1. ESCUCHAR CREACIÓN O EDICIÓN DE ETIQUETAS (Colores y Nombres) ▼
     whatsappSock.ev.on('labels.edit', async (label) => {
         try {
-            const etiquetaRef = db.collection('user_profiles').doc(email).collection('crm_etiquetas').doc(label.id);
-            if (label.deleted) {
+            // Protección: A veces Baileys envía un objeto con la propiedad 'label' anidada
+            const lbl = label.label || label; 
+            if (!lbl || !lbl.id) return;
+
+            const etiquetaRef = db.collection('user_profiles').doc(email).collection('crm_etiquetas').doc(lbl.id);
+            if (lbl.deleted) {
                 await etiquetaRef.delete();
             } else {
-                // Meta guarda el color como un número entero 32-bit. Lo convertimos a Hexadecimal (#RRGGBB)
-                let colorHex = label.color ? `#${(label.color & 0x00FFFFFF).toString(16).padStart(6, '0')}` : "#888888";
-                await etiquetaRef.set({ id: label.id, nombre: label.name, colorHex: colorHex }, { merge: true });
+                let colorHex = lbl.color ? `#${(lbl.color & 0x00FFFFFF).toString(16).padStart(6, '0')}` : "#888888";
+                await etiquetaRef.set({ id: lbl.id, nombre: lbl.name, colorHex: colorHex }, { merge: true });
             }
         } catch (e) { console.error("Error guardando etiqueta:", e); }
     });
 
     // ▼ 2. ESCUCHAR CUANDO LE PONES UNA ETIQUETA A UN CLIENTE ▼
-    whatsappSock.ev.on('labels.association', async (association) => {
-        if (association.type === 'Chat') {
-            try {
-                const jid = association.chatId;
-                const labelId = association.labelId;
-                const contactoRef = getColeccionContactos(email).doc(jid);
+    whatsappSock.ev.on('labels.association', async (data) => {
+        try {
+            // Protección contra las envolturas de eventos de Baileys
+            const assoc = data.association || data;
+            const action = data.action || assoc.action;
+            const type = assoc.type || "Chat";
+            const chatId = assoc.chatId;
+            const labelId = assoc.labelId;
+
+            if (type === 'Chat' && chatId && labelId) {
+                const contactoRef = getColeccionContactos(email).doc(chatId);
                 
-                // ◄ FIX CRÍTICO: Usamos 'set' con 'merge: true' en lugar de 'update'
-                // Esto garantiza que si el cliente es viejo y no estaba en la BD, no crashee.
-                if (association.action === 'add') {
+                if (action === 'add') {
                     await contactoRef.set({ etiquetas: FieldValue.arrayUnion(labelId) }, { merge: true });
-                } else if (association.action === 'remove') {
+                } else if (action === 'remove') {
                     await contactoRef.set({ etiquetas: FieldValue.arrayRemove(labelId) }, { merge: true });
                 }
-            } catch (e) { 
-                console.error("Error guardando asociación de etiqueta:", e);
             }
+        } catch (e) { 
+            console.error("Error asociación etiqueta:", e);
         }
     });
 
