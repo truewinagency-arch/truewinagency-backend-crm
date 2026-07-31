@@ -493,7 +493,8 @@ async function connectToWhatsApp(email) {
     await guardarMensajeBD(email, identificador, nombrePerfil, texto, tipoMensaje, remitenteEspecifico, mediaUrl, mediaType, msg.key.id);
 
         // 🚀 AQUÍ ESTÁ LA MAGIA QUE FALTABA: Despertar al bot si el mensaje es del cliente
-       procesarBotEnNube(email, identificador, texto, whatsappSock, tipoMensaje);
+        // ▼ FIX: Añadimos nombrePerfil al final de la llamada ▼
+        procesarBotEnNube(email, identificador, texto, whatsappSock, tipoMensaje, nombrePerfil);
 
         // Emite el mensaje al frontend
         io.to(email).emit('nuevo-mensaje', { 
@@ -1350,11 +1351,12 @@ async function enviarTarjetaEnlace(jidReal, mensajeFinal, linkData, whatsappSock
     return mensajeProtobuf.key.id; 
 }
 
-async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSockLocal, tipoMensaje) {
+// ▼ FIX: Añadimos nombrePerfil aquí en la recepción de la función ▼
+async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSockLocal, tipoMensaje, nombrePerfil) {
     if (!textoMensaje || !whatsappSockLocal || !email) return;
     const textoLimpio = textoMensaje.toLowerCase().trim();
     const esGrupo = numeroCliente.endsWith('@g.us'); 
-    const esMio = (tipoMensaje === 'out'); // ◄ Detectamos si el mensaje lo enviaste tú
+    const esMio = (tipoMensaje === 'out'); 
 
     try {
         const configDoc = await db.collection('user_profiles').doc(email).collection('crm_config').doc('automatizaciones').get();
@@ -1367,17 +1369,16 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
         for (const auto of automatizaciones) {
             
             // 🛑 REGLA 0: ¿Quién dispara esta regla?
-            const disparador = auto.disparador || 'cliente'; // Por defecto protege a los viejos como "cliente"
+            const disparador = auto.disparador || 'cliente'; 
             let tienePermiso = false;
             
             if (disparador === 'cliente' && !esMio) tienePermiso = true;
             if (disparador === 'yo' && esMio) tienePermiso = true;
             if (disparador === 'ambos') tienePermiso = true;
 
-            // Si no tiene permiso de activar esta regla específica, pasa a la siguiente
             if (!tienePermiso) continue;
 
-            // 🛑 REGLA 1: GRUPOS (Si es grupo y el switch está apagado, la ignoramos)
+            // 🛑 REGLA 1: GRUPOS
             if (esGrupo && !auto.ejecutarEnGrupos) continue;
 
             const arrayKeywords = auto.palabraClave.split(',').map(k => k.toLowerCase().trim()).filter(k => k);
@@ -1389,8 +1390,14 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
             }
 
             if (haceMatch) {
+                // ===============================================================
+                // ▼ FIX 1: DESCARGAMOS LA PLANTILLA PRIMERO ANTES QUE CUALQUIER COSA
+                // ===============================================================
+                const tplDoc = await db.collection('user_profiles').doc(email).collection('crm_plantillas').doc(auto.idPlantilla).get();
+                if (!tplDoc.exists) break;
+                const plantilla = tplDoc.data();
                 
-                // 🛑 REGLA 2: OMITIR SI YA FUE ENVIADA (Manual o Bot)
+                // 🛑 REGLA 2: OMITIR SI YA FUE ENVIADA
                 if (auto.omitirSiYaEnviado) {
                     const idLogEnvio = `${auto.idPlantilla}_${numeroCliente.replace(/[^a-zA-Z0-9]/g, '')}`;
                     const logEnvioDoc = await db.collection('user_profiles').doc(email).collection('crm_registro_envios').doc(idLogEnvio).get();
@@ -1416,21 +1423,14 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                     });
                 }
 
-                if (auto.activarNotificacion) {
-                    // ▼ FIX: Declaración segura anti-crash ▼
-                    // Si tu función procesarBotEnNube recibe el nombre bajo otra variable (ej: 'nombre', 'pushName' o 'msg.pushName'),
-                    // cambia este 'null' por esa variable para que salga el nombre real.
-                    let nombreExtraido = null; 
-                    
-                    try {
-                        // Intentamos atrapar nombres comunes de Baileys por si están en el entorno
-                        if (typeof nombre !== 'undefined') nombreExtraido = nombre;
-                        else if (typeof pushName !== 'undefined') nombreExtraido = pushName;
-                    } catch(e) {}
-
-                    const nombreMostrar = (nombreExtraido && nombreExtraido.trim() !== "") 
-                        ? nombreExtraido 
+               if (auto.activarNotificacion) {
+                    // ▼ FIX 2: USAMOS LA VARIABLE nombrePerfil QUE AHORA SÍ RECIBE LA FUNCIÓN
+                    const nombreMostrar = (nombrePerfil && nombrePerfil.trim() !== "") 
+                        ? nombrePerfil 
                         : "contacto de WhatsApp";
+
+                    // Como descargamos la plantilla arriba, esto ahora funciona perfecto
+                    const nombreSecuencia = plantilla.nombre || "secuencia automatizada";
 
                     console.log(`🔔 [FCM] Disparando notificación PUSH para: ${numeroCliente}`);
                     
@@ -1442,7 +1442,7 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                             topic: topicName,
                             notification: {
                                 title: auto.palabraClave,          
-                                body: `Enviado por ${nombreMostrar}` 
+                                body: `Enviando ${nombreSecuencia} a ${nombreMostrar}` 
                             },
                             data: {
                                 chatId: numeroCliente 
@@ -1451,7 +1451,6 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                                 notification: {
                                     channelId: 'crm_bot_alerts',
                                     sound: 'sonido_bot',
-                                    // ▼ NUEVO: FUERZA EL ICONO Y EL COLOR DORADO ▼
                                     icon: 'ic_notificacion_bot', 
                                     color: '#F8A72B' 
                                 }
@@ -1484,10 +1483,9 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                     }
                 }, tiempoLecturaHumana);
 
-                const tplDoc = await db.collection('user_profiles').doc(email).collection('crm_plantillas').doc(auto.idPlantilla).get();
-                if (!tplDoc.exists) break;
+                // ▼ FIX 3: COMO YA DESCARGAMOS LA PLANTILLA ARRIBA, SOLO LA ENVIAMOS DIRECTO A LA FUNCIÓN
+                despacharFlujoDesdeNube(email, numeroCliente, plantilla, whatsappSockLocal);
                 
-                despacharFlujoDesdeNube(email, numeroCliente, tplDoc.data(), whatsappSockLocal);
                 break; 
             }
         }
