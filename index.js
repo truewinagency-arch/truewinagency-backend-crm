@@ -20,6 +20,7 @@ const { Server } = require('socket.io');
 
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore'); 
+const { getMessaging } = require('firebase-admin/messaging'); // ◄ AÑADE ESTA LÍNEA
 const serviceAccount = require('./firebase-credentials.json');
 
 // =========================================================================
@@ -1416,7 +1417,32 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                 }
 
                 if (auto.activarNotificacion) {
-                    console.log(`🔔 [FCM PENDIENTE] Generar notificación PUSH en el celular para el chat: ${numeroCliente}`);
+                    console.log(`🔔 [FCM] Disparando notificación PUSH para: ${numeroCliente}`);
+                    try {
+                        // Limpiamos el email para usarlo como "Tema" (Topic) de Firebase
+                        const emailLimpio = email.replace(/[^a-zA-Z0-9]/g, '');
+                        const topicName = `crm_${emailLimpio}`;
+                        
+                        const mensajePush = {
+                            topic: topicName,
+                            notification: {
+                                title: '🤖 Bot Activado',
+                                body: `La regla "${auto.palabraClave}" le respondió a ${numeroCliente.split('@')[0]}`
+                            },
+                            android: {
+                                notification: {
+                                    channelId: 'crm_bot_alerts', // ◄ Conecta con el canal de Android
+                                    sound: 'sonido_bot'          // ◄ Invoca tu sonido personalizado
+                                }
+                            }
+                        };
+                        
+                        getMessaging().send(mensajePush)
+                            .then(res => console.log('Notificación enviada:', res))
+                            .catch(e => console.log("Error enviando Push:", e));
+                    } catch (err) {
+                        console.error("Fallo al preparar FCM:", err);
+                    }
                 }
 
                 // REGISTRO CENTRAL DE ENVÍOS
