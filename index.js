@@ -349,18 +349,22 @@ async function connectToWhatsApp(email) {
     });
 
     // ▼ 1. ESCUCHAR CREACIÓN O EDICIÓN DE ETIQUETAS (Colores y Nombres) ▼
-    whatsappSock.ev.on('labels.edit', async (label) => {
+    whatsappSock.ev.on('labels.edit', async (labelPatch) => {
         try {
-            // Protección: A veces Baileys envía un objeto con la propiedad 'label' anidada
-            const lbl = label.label || label; 
-            if (!lbl || !lbl.id) return;
-
-            const etiquetaRef = db.collection('user_profiles').doc(email).collection('crm_etiquetas').doc(lbl.id);
-            if (lbl.deleted) {
-                await etiquetaRef.delete();
-            } else {
-                let colorHex = lbl.color ? `#${(lbl.color & 0x00FFFFFF).toString(16).padStart(6, '0')}` : "#888888";
-                await etiquetaRef.set({ id: lbl.id, nombre: lbl.name, colorHex: colorHex }, { merge: true });
+            console.log("[Etiquetas] EVENTO DE EDICIÓN RECIBIDO:", JSON.stringify(labelPatch));
+            const labels = Array.isArray(labelPatch) ? labelPatch : [labelPatch];
+            
+            for (let l of labels) {
+                const lbl = l.label || l;
+                if (!lbl || !lbl.id) continue;
+                
+                const etiquetaRef = db.collection('user_profiles').doc(email).collection('crm_etiquetas').doc(lbl.id);
+                if (lbl.deleted) {
+                    await etiquetaRef.delete();
+                } else {
+                    let colorHex = lbl.color ? `#${(lbl.color & 0x00FFFFFF).toString(16).padStart(6, '0')}` : "#888888";
+                    await etiquetaRef.set({ id: lbl.id, nombre: lbl.name, colorHex: colorHex }, { merge: true });
+                }
             }
         } catch (e) { console.error("Error guardando etiqueta:", e); }
     });
@@ -368,25 +372,26 @@ async function connectToWhatsApp(email) {
     // ▼ 2. ESCUCHAR CUANDO LE PONES UNA ETIQUETA A UN CLIENTE ▼
     whatsappSock.ev.on('labels.association', async (data) => {
         try {
-            // Protección contra las envolturas de eventos de Baileys
-            const assoc = data.association || data;
-            const action = data.action || assoc.action;
-            const type = assoc.type || "Chat";
-            const chatId = assoc.chatId;
-            const labelId = assoc.labelId;
+            console.log("[Etiquetas] ASOCIACIÓN RECIBIDA:", JSON.stringify(data));
+            const associations = Array.isArray(data) ? data : [data];
+            
+            for (let assocData of associations) {
+                const assoc = assocData.association || assocData;
+                const action = assocData.action || assoc.action;
+                const type = assoc.type || "Chat";
+                const chatId = assoc.chatId;
+                const labelId = assoc.labelId;
 
-            if (type === 'Chat' && chatId && labelId) {
-                const contactoRef = getColeccionContactos(email).doc(chatId);
-                
-                if (action === 'add') {
-                    await contactoRef.set({ etiquetas: FieldValue.arrayUnion(labelId) }, { merge: true });
-                } else if (action === 'remove') {
-                    await contactoRef.set({ etiquetas: FieldValue.arrayRemove(labelId) }, { merge: true });
+                if (type === 'Chat' && chatId && labelId) {
+                    const contactoRef = getColeccionContactos(email).doc(chatId);
+                    if (action === 'add') {
+                        await contactoRef.set({ etiquetas: FieldValue.arrayUnion(labelId) }, { merge: true });
+                    } else if (action === 'remove') {
+                        await contactoRef.set({ etiquetas: FieldValue.arrayRemove(labelId) }, { merge: true });
+                    }
                 }
             }
-        } catch (e) { 
-            console.error("Error asociación etiqueta:", e);
-        }
+        } catch (e) { console.error("Error asociación etiqueta:", e); }
     });
 
     whatsappSock.ev.on('messages.upsert', async (m) => {
@@ -946,6 +951,31 @@ app.post('/api/send-reaction', async (req, res) => {
 
         res.json({ success: true });
     } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- ENDPOINT: ASIGNAR/REMOVER ETIQUETA EN WHATSAPP NATIVO ---
+app.post('/api/etiquetas/asignar', async (req, res) => {
+    try {
+        const { email, numero, labelId, accion } = req.body;
+        if (!email || !numero || !labelId || !accion) return res.status(400).json({error: "Faltan datos"});
+
+        const whatsappSockLocal = sesionesActivas.get(email);
+        if (!whatsappSockLocal) return res.status(401).json({ error: "Sesión no activa" });
+
+        const jidReal = formatearJid(numero);
+        
+        // Ejecutamos la orden directa en los servidores de Meta
+        if (accion === 'add') {
+            await whatsappSockLocal.chatModify({ addChatLabel: { labelId: String(labelId) } }, jidReal);
+        } else if (accion === 'remove') {
+            await whatsappSockLocal.chatModify({ removeChatLabel: { labelId: String(labelId) } }, jidReal);
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error("Error al modificar etiqueta nativa:", error);
         res.status(500).json({ error: error.message });
     }
 });
