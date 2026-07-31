@@ -1417,10 +1417,19 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                 }
 
                 if (auto.activarNotificacion) {
-                    // 1. VALIDAMOS EL NOMBRE: Si no existe, usamos el texto por defecto
-                    // (Asegúrate de tener la variable que contiene el nombre del cliente en este punto)
-                    const nombreMostrar = (nombreCliente && nombreCliente.trim() !== "") 
-                        ? nombreCliente 
+                    // ▼ FIX: Declaración segura anti-crash ▼
+                    // Si tu función procesarBotEnNube recibe el nombre bajo otra variable (ej: 'nombre', 'pushName' o 'msg.pushName'),
+                    // cambia este 'null' por esa variable para que salga el nombre real.
+                    let nombreExtraido = null; 
+                    
+                    try {
+                        // Intentamos atrapar nombres comunes de Baileys por si están en el entorno
+                        if (typeof nombre !== 'undefined') nombreExtraido = nombre;
+                        else if (typeof pushName !== 'undefined') nombreExtraido = pushName;
+                    } catch(e) {}
+
+                    const nombreMostrar = (nombreExtraido && nombreExtraido.trim() !== "") 
+                        ? nombreExtraido 
                         : "contacto de WhatsApp";
 
                     console.log(`🔔 [FCM] Disparando notificación PUSH para: ${numeroCliente}`);
@@ -1432,11 +1441,11 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                         const mensajePush = {
                             topic: topicName,
                             notification: {
-                                title: auto.palabraClave,          // ◄ FIX: Título con la palabra clave
-                                body: `Enviado por ${nombreMostrar}` // ◄ FIX: Cuerpo con el nombre
+                                title: auto.palabraClave,          
+                                body: `Enviado por ${nombreMostrar}` 
                             },
                             data: {
-                                chatId: numeroCliente // ◄ DATO INVISIBLE CLAVE: Le dirá al celular qué chat abrir
+                                chatId: numeroCliente 
                             },
                             android: {
                                 notification: {
