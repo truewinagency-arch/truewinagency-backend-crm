@@ -1417,22 +1417,31 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                 }
 
                 if (auto.activarNotificacion) {
+                    // 1. VALIDAMOS EL NOMBRE: Si no existe, usamos el texto por defecto
+                    // (Asegúrate de tener la variable que contiene el nombre del cliente en este punto)
+                    const nombreMostrar = (nombreCliente && nombreCliente.trim() !== "") 
+                        ? nombreCliente 
+                        : "contacto de WhatsApp";
+
                     console.log(`🔔 [FCM] Disparando notificación PUSH para: ${numeroCliente}`);
+                    
                     try {
-                        // Limpiamos el email para usarlo como "Tema" (Topic) de Firebase
                         const emailLimpio = email.replace(/[^a-zA-Z0-9]/g, '');
                         const topicName = `crm_${emailLimpio}`;
                         
                         const mensajePush = {
                             topic: topicName,
                             notification: {
-                                title: '🤖 Bot Activado',
-                                body: `La regla "${auto.palabraClave}" le respondió a ${numeroCliente.split('@')[0]}`
+                                title: auto.palabraClave,          // ◄ FIX: Título con la palabra clave
+                                body: `Enviado por ${nombreMostrar}` // ◄ FIX: Cuerpo con el nombre
+                            },
+                            data: {
+                                chatId: numeroCliente // ◄ DATO INVISIBLE CLAVE: Le dirá al celular qué chat abrir
                             },
                             android: {
                                 notification: {
-                                    channelId: 'crm_bot_alerts', // ◄ Conecta con el canal de Android
-                                    sound: 'sonido_bot'          // ◄ Invoca tu sonido personalizado
+                                    channelId: 'crm_bot_alerts',
+                                    sound: 'sonido_bot'
                                 }
                             }
                         };
