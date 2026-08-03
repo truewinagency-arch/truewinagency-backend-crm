@@ -169,11 +169,6 @@ async function connectToWhatsApp(email) {
         }
         let cacheLocal = cacheCriptografica.get(email);
 
-    if (!cacheCriptografica.has(email)) {
-        cacheCriptografica.set(email, { creds: {}, keys: {}, cargada: false });
-    }
-    let cacheLocal = cacheCriptografica.get(email);
-
     const readState = async () => {
         if (cacheLocal.cargada) {
             return { creds: cacheLocal.creds, keys: cacheLocal.keys, tieneDatos: true };
