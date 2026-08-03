@@ -351,8 +351,16 @@ async function connectToWhatsApp(email) {
                 return; 
             }
 
+            // ◄ FIX CRÍTICO: Limpiamos la sesión zombie y ponemos un candado al reinicio ►
             if (whatsappSock) whatsappSock.ev.removeAllListeners();
-            setTimeout(() => connectToWhatsApp(email), 3000); 
+            sesionesActivas.delete(email); 
+            
+            setTimeout(() => {
+                // Solo inicia una nueva sesión si no hay otra cargando ni otra activa
+                if (!inicializandoSesiones.has(email) && !sesionesActivas.has(email)) {
+                    connectToWhatsApp(email);
+                }
+            }, 3000); 
         }
         
         if (connection === 'open') {
