@@ -438,10 +438,16 @@ async function connectToWhatsApp(email) {
 
         const remoteJid = msg.key.remoteJid;
         const esGrupo = remoteJid.endsWith('@g.us');
-        let nombrePerfil = msg.pushName || (esGrupo ? "Grupo de WhatsApp" : "Usuario"); 
-        let remitenteEspecifico = esGrupo ? (msg.pushName || msg.key.participant?.split('@')[0] || "Miembro") : null; 
+        
+        // ◄ FIX CRÍTICO: Evitar que tu propio nombre se asigne al cliente ►
+        const esMio = msg.key.fromMe;
+        const pushNameLimpio = esMio ? null : msg.pushName;
+        
+        let nombrePerfil = pushNameLimpio || (esGrupo ? "Grupo de WhatsApp" : "Usuario"); 
+        let remitenteEspecifico = esGrupo ? (pushNameLimpio || msg.key.participant?.split('@')[0] || "Miembro") : null; 
 
-        await registrarContactoInteligente(email, remoteJid, msg.pushName, esGrupo, whatsappSock);
+        // Pasamos pushNameLimpio para que si es tuyo, se guarde como "Usuario Desconocido" y se actualice cuando ellos respondan
+        await registrarContactoInteligente(email, remoteJid, pushNameLimpio, esGrupo, whatsappSock);
         
         try {
             const contactoDoc = await getColeccionContactos(email).doc(remoteJid).get();
