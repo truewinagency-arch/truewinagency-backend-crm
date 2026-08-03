@@ -326,21 +326,24 @@ async function connectToWhatsApp(email) {
             const errorBoom = lastDisconnect?.error instanceof Boom ? lastDisconnect.error : null;
             const codigoError = errorBoom ? errorBoom.output?.statusCode : (lastDisconnect?.error?.output?.statusCode || 500);
             
-            if (codigoError === 405 || codigoError === 401) {
+           if (codigoError === 405 || codigoError === 401) {
+                console.log(`[TrueWin] Sesión corrupta detectada para ${email}. Reseteando credenciales...`);
                 io.to(email).emit('estado-conexion', 'desconectado'); 
                 sesionesActivas.delete(email);
                 cacheCriptografica.set(email, { creds: {}, keys: {}, cargada: false });
 
+                // ◄ FIX CRÍTICO DE COSTOS Y BUCLES ►
+                // Solo borramos el documento maestro "creds". 
+                // Esto fuerza a Baileys a generar un nuevo QR SIN romper el límite de 500 de Firebase.
                 try {
-                    const snapshot = await coleccionSesionUsuario.get();
-                    if (!snapshot.empty) {
-                        const batch = db.batch();
-                        snapshot.docs.forEach((doc) => batch.delete(doc.ref));
-                        await batch.commit();
-                    }
+                    await coleccionSesionUsuario.doc('creds').delete();
                 } catch (fsError) {}
 
-                setTimeout(() => connectToWhatsApp(email), 4000);
+                setTimeout(() => {
+                    if (!inicializandoSesiones.has(email) && !sesionesActivas.has(email)) {
+                        connectToWhatsApp(email);
+                    }
+                }, 4000);
                 return;
             }
 
@@ -626,6 +629,41 @@ app.get('/status', (req, res) => {
         return res.json({ status: "connected", user: sock.user });
     }
     res.json({ status: "disconnected", qr: qrActivos.get(email) });
+});
+
+// ▼ NUEVO: ENDPOINT DE EMERGENCIA PARA FORZAR REINICIO ▼
+app.get('/api/logout', async (req, res) => {
+    const email = req.query.email;
+    if (!email) return res.status(400).json({ error: "Falta email" });
+
+    console.log(`[TrueWin] Forzando cierre de sesión manual para: ${email}`);
+    
+    // 1. Apagamos el socket activo
+    const sock = sesionesActivas.get(email);
+    if (sock) {
+        try { await sock.logout(); } catch(e) {}
+        sock.ev.removeAllListeners();
+        sesionesActivas.delete(email);
+    }
+
+    // 2. Limpiamos la RAM
+    cacheCriptografica.set(email, { creds: {}, keys: {}, cargada: false });
+
+    // 3. Borramos el archivo maestro para forzar QR
+    try {
+        await getColeccionSesion(email).doc('creds').delete();
+    } catch(e) {}
+
+    io.to(email).emit('estado-conexion', 'desconectado');
+    
+    // 4. Reiniciamos el ciclo limpio
+    setTimeout(() => {
+        if (!inicializandoSesiones.has(email) && !sesionesActivas.has(email)) {
+            connectToWhatsApp(email);
+        }
+    }, 3000);
+
+    res.json({ success: true, message: "Sesión reseteada. Escanea el nuevo QR." });
 });
 
 app.get('/api/contactos', async (req, res) => {
