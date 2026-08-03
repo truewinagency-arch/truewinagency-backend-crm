@@ -153,17 +153,21 @@ const idsEnviadosPorBot = new Set();
 // 3. CONEXIÓN A WHATSAPP CON CACHÉ EN RAM + LOTES EN FIRESTORE
 // =========================================================================
 async function connectToWhatsApp(email) {
-    // 🛡️ DOBLE VALIDACIÓN: Si llega vacío hasta aquí, abortamos antes de tocar Firebase
-    if (!email || typeof email !== 'string' || email.trim() === '') {
-        console.error(`[TrueWin-Backend] 🛑 ERROR FATAL EVITADO: connectToWhatsApp recibió un email vacío.`);
-        return;
-    }
-    
+    if (!email || typeof email !== 'string' || email.trim() === '') return;
     email = email.trim();
-    console.log(`[TrueWin-Backend] Sincronizando sesión para: ${email}...`);
 
-    // Si pasamos la barrera de arriba, esta línea ya NUNCA dará error
-    const coleccionSesionUsuario = getColeccionSesion(email);
+    // ◄ CANDADO ANTI-HYDRA MAESTRO ►
+    if (sesionesActivas.has(email) || inicializandoSesiones.has(email)) return;
+    inicializandoSesiones.add(email);
+
+    try {
+        console.log(`[TrueWin-Backend] Sincronizando sesión para: ${email}...`);
+        const coleccionSesionUsuario = getColeccionSesion(email);
+
+        if (!cacheCriptografica.has(email)) {
+            cacheCriptografica.set(email, { creds: {}, keys: {}, cargada: false });
+        }
+        let cacheLocal = cacheCriptografica.get(email);
 
     if (!cacheCriptografica.has(email)) {
         cacheCriptografica.set(email, { creds: {}, keys: {}, cargada: false });
@@ -252,6 +256,14 @@ async function connectToWhatsApp(email) {
                             if (value) {
                                 cacheLocal.keys[docId] = value; 
                                 const stringifiedData = JSON.stringify(value, BufferJSON.replacer);
+                                
+                                // ◄ FIX FIREBASE 1MB (PREVIENE EL CRASH DEL LOTE) ►
+                                // Si una llave pesa más de 1MB, la ignoramos para salvar las demás.
+                                if (Buffer.byteLength(stringifiedData, 'utf8') > 1000000) {
+                                    console.warn(`[Firebase] Ignorando llave gigante: ${docId}`);
+                                    continue; 
+                                }
+
                                 batch.set(docRef, { payload: stringifiedData });
                             } else {
                                 delete cacheLocal.keys[docId];
@@ -562,7 +574,12 @@ async function connectToWhatsApp(email) {
         }
     });
 
-    whatsappSock.ev.on('creds.update', saveCreds);
+   whatsappSock.ev.on('creds.update', saveCreds);
+
+    } finally {
+        // ◄ LIBERAMOS EL CANDADO DE FORMA SEGURA AL TERMINAR LA CREACIÓN ►
+        inicializandoSesiones.delete(email);
+    }
 }
 
 // =========================================================================
@@ -571,19 +588,18 @@ async function connectToWhatsApp(email) {
 
 io.on('connection', (socket) => {
     socket.on('autenticar', async (data) => {
-    // Extrae email ya sea que venga como string directo o como objeto { email }
-    let email = typeof data === 'string' ? data : data?.email || data?.uid;
+        let email = typeof data === 'string' ? data : data?.email || data?.uid;
 
-    if (!email || typeof email !== 'string' || email.trim() === '') {
-        console.error(`[Socket.IO] 🛑 Intento de autenticación rechazado: Email inválido.`);
-        return;
-    }
+        if (!email || typeof email !== 'string' || email.trim() === '') return;
 
-    email = email.trim();
-    console.log(`[Socket.IO] Autenticando sala privada para el email: ${email}`);
-    socket.join(email); 
+        email = email.trim();
+        socket.join(email); 
 
-    if (sesionesActivas.has(email) || inicializandoSesiones.has(email)) {
+        // ◄ DELEGAMOS LA SEGURIDAD TOTAL AL CANDADO MAESTRO ►
+        // Si ya está conectando o conectado, la función abortará sola.
+        connectToWhatsApp(email);
+        
+        // Muestra la UI si ya existía una sesión viva
         const whatsappSockLocal = sesionesActivas.get(email);
         if (whatsappSockLocal && whatsappSockLocal.user) {
             socket.emit('estado-conexion', 'conectado');
@@ -591,17 +607,7 @@ io.on('connection', (socket) => {
             socket.emit('estado-conexion', 'desconectado');
             socket.emit('qr-update', qrActivos.get(email));
         }
-        return;
-    }
-
-    inicializandoSesiones.add(email);
-    
-    try {
-        await connectToWhatsApp(email);
-    } finally {
-        inicializandoSesiones.delete(email);
-    }
-});
+    });
 
     socket.on('crm-presencia', async (data) => {
         // También protegemos este evento por si acaso
