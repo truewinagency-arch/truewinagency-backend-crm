@@ -175,15 +175,14 @@ async function connectToWhatsApp(email) {
             return { creds: cacheLocal.creds, keys: cacheLocal.keys, tieneDatos: true };
         }
         try {
-            const snapshot = await coleccionSesionUsuario.get();
+            // ▼ FIX CRÍTICO DE COSTOS: Solo leemos UN documento ('creds'), NO toda la colección masiva ▼
+            const credsDoc = await coleccionSesionUsuario.doc('creds').get();
             let tieneDatos = false; 
             
-            snapshot.forEach(doc => {
+            if (credsDoc.exists) {
                 tieneDatos = true;
-                const parsedData = JSON.parse(doc.data().payload, BufferJSON.reviver);
-                if (doc.id === 'creds') cacheLocal.creds = parsedData;
-                else cacheLocal.keys[doc.id] = parsedData;
-            });
+                cacheLocal.creds = JSON.parse(credsDoc.data().payload, BufferJSON.reviver);
+            }
 
             if (tieneDatos) cacheLocal.cargada = true;
             return { creds: cacheLocal.creds, keys: cacheLocal.keys, tieneDatos };
@@ -219,7 +218,21 @@ async function connectToWhatsApp(email) {
                     const data = {};
                     for (const id of ids) {
                         const docId = `${type}-${id}`;
-                        data[id] = cacheLocal.keys[docId];
+                        
+                        // ▼ LAZY LOADING: Si la llave ya está en la memoria RAM, la usamos ▼
+                        if (cacheLocal.keys[docId]) {
+                            data[id] = cacheLocal.keys[docId];
+                        } else {
+                            // ▼ Si no está en RAM, SOLO descargamos ESA llave en específico de Firestore ▼
+                            try {
+                                const doc = await coleccionSesionUsuario.doc(docId).get();
+                                if (doc.exists) {
+                                    const parsed = JSON.parse(doc.data().payload, BufferJSON.reviver);
+                                    cacheLocal.keys[docId] = parsed;
+                                    data[id] = parsed;
+                                }
+                            } catch(e) {}
+                        }
                     }
                     return data;
                 },
