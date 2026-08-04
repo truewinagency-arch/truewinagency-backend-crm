@@ -447,13 +447,20 @@ async function connectToWhatsApp(email) {
             messageType = getContentType(msg.message);
         }
         // 3. Desempaquetar Documentos con subtítulos en versiones nuevas
-        if (messageType === 'documentWithCaptionMessage') {
+       if (messageType === 'documentWithCaptionMessage') {
             msg.message = msg.message.documentWithCaptionMessage.message;
             messageType = getContentType(msg.message);
         }
 
-        // Ya no bloqueamos 'senderKeyDistributionMessage' porque getContentType lo ignora inteligentemente
-        if (['pollUpdateMessage', 'pollCreationMessage'].includes(messageType)) return;
+        // ◄ FIX CRÍTICO: ESCUDO CONTRA SPAM INTERNO DE GRUPOS ►
+        if ([
+            'pollUpdateMessage', 
+            'pollCreationMessage', 
+            'senderKeyDistributionMessage', // ◄ EL CAUSANTE DE LA LLUVIA DE MENSAJES
+            'messageContextInfo'
+        ].includes(messageType)) {
+            return;
+        }
 
         // ▼ DETECTOR DE MENSAJES BORRADOS POR EL CLIENTE ▼
         if (messageType === 'protocolMessage') {
@@ -521,13 +528,27 @@ async function connectToWhatsApp(email) {
         } else if (messageType === 'audioMessage') {
             mediaType = 'audio';
             texto = ""; 
-        } else if (messageType === 'documentMessage') { // ◄ FIX: AHORA SÍ DETECTA DOCUMENTOS ►
+        } else if (messageType === 'documentMessage') {
             mediaType = 'document';
             texto = msg.message.documentMessage?.caption || msg.message.documentMessage?.title || msg.message.documentMessage?.fileName || "Documento adjunto";
-        } else if (!texto && !mediaType) {
-            texto = "[Mensaje interactivo]";
+        } else if (messageType === 'stickerMessage') {
+            texto = "🖼️ [Sticker]";
+        } else if (messageType === 'contactMessage') {
+            texto = "👤 [Contacto]";
+        } else if (messageType === 'locationMessage') {
+            texto = "📍 [Ubicación]";
+        } else if (messageType === 'buttonsResponseMessage' || messageType === 'templateButtonReplyMessage' || messageType === 'listResponseMessage') {
+            // Respuestas reales a botones interactivos de WhatsApp
+            texto = msg.message.buttonsResponseMessage?.selectedDisplayText || 
+                    msg.message.templateButtonReplyMessage?.selectedDisplayText || 
+                    msg.message.listResponseMessage?.title || "[Respuesta interactiva]";
         }
 
+        // ◄ FIX CRÍTICO: DESTRUCCIÓN DE FANTASMAS ►
+        // Si después de pasar por todos los filtros, el mensaje no tiene texto ni multimedia,
+        // significa que es basura interna del sistema (estados, cambios de configuración, etc).
+        // Lo abortamos de inmediato.
+        if (!texto && !mediaType) return;
         if (mediaType) {
             try {
                 const { downloadMediaMessage } = require('@whiskeysockets/baileys');
