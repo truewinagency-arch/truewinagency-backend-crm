@@ -425,9 +425,29 @@ async function connectToWhatsApp(email) {
 
         // ▼ (A PARTIR DE AQUÍ SIGUE TU CÓDIGO NORMAL) ▼
         const tipoMensaje = msg.key.fromMe ? 'out' : 'in';
-        const messageType = Object.keys(msg.message || {})[0];
+        
+        // ◄ FIX CRÍTICO: EXTRACCIÓN PROFUNDA DEL TIPO DE MENSAJE ►
+        const { getContentType } = require('@whiskeysockets/baileys');
+        let messageType = getContentType(msg.message);
 
-        if (['pollUpdateMessage', 'pollCreationMessage', 'senderKeyDistributionMessage'].includes(messageType)) return;
+        // 1. Desempaquetar "Mensajes Temporales" (Desaparecen en 24h/7d)
+        if (messageType === 'ephemeralMessage') {
+            msg.message = msg.message.ephemeralMessage.message;
+            messageType = getContentType(msg.message);
+        }
+        // 2. Desempaquetar fotos/videos de "Ver una sola vez"
+        if (messageType === 'viewOnceMessage' || messageType === 'viewOnceMessageV2') {
+            msg.message = msg.message.viewOnceMessage?.message || msg.message.viewOnceMessageV2?.message;
+            messageType = getContentType(msg.message);
+        }
+        // 3. Desempaquetar Documentos con subtítulos en versiones nuevas
+        if (messageType === 'documentWithCaptionMessage') {
+            msg.message = msg.message.documentWithCaptionMessage.message;
+            messageType = getContentType(msg.message);
+        }
+
+        // Ya no bloqueamos 'senderKeyDistributionMessage' porque getContentType lo ignora inteligentemente
+        if (['pollUpdateMessage', 'pollCreationMessage'].includes(messageType)) return;
 
         // ▼ DETECTOR DE MENSAJES BORRADOS POR EL CLIENTE ▼
         if (messageType === 'protocolMessage') {
@@ -495,7 +515,10 @@ async function connectToWhatsApp(email) {
         } else if (messageType === 'audioMessage') {
             mediaType = 'audio';
             texto = ""; 
-       } else if (!texto && !mediaType) {
+        } else if (messageType === 'documentMessage') { // ◄ FIX: AHORA SÍ DETECTA DOCUMENTOS ►
+            mediaType = 'document';
+            texto = msg.message.documentMessage?.caption || msg.message.documentMessage?.title || msg.message.documentMessage?.fileName || "Documento adjunto";
+        } else if (!texto && !mediaType) {
             texto = "[Mensaje interactivo]";
         }
 
@@ -507,8 +530,24 @@ async function connectToWhatsApp(email) {
                 if (buffer) {
                     const crypto = require('crypto');
                     const token = crypto.randomUUID(); 
-                    let extension = mediaType === 'image' ? 'png' : (mediaType === 'video' ? 'mp4' : 'ogg');
-                    let contentType = mediaType === 'image' ? 'image/png' : (mediaType === 'video' ? 'video/mp4' : 'audio/ogg; codecs=opus');
+                    
+                    // ◄ FIX: ASIGNACIÓN DINÁMICA DE EXTENSIONES (INCLUYE PDF, EXCEL Y WORD) ►
+                    let extension = 'bin';
+                    let contentType = 'application/octet-stream';
+
+                    if (mediaType === 'image') { extension = 'png'; contentType = 'image/png'; }
+                    else if (mediaType === 'video') { extension = 'mp4'; contentType = 'video/mp4'; }
+                    else if (mediaType === 'audio') { extension = 'ogg'; contentType = 'audio/ogg; codecs=opus'; }
+                    else if (mediaType === 'document') {
+                        const docMsg = msg.message.documentMessage;
+                        contentType = docMsg?.mimetype || 'application/pdf';
+                        const fName = (docMsg?.fileName || '').toLowerCase();
+                        
+                        if (fName.endsWith('.pdf')) extension = 'pdf';
+                        else if (fName.endsWith('.docx') || fName.endsWith('.doc')) extension = 'docx';
+                        else if (fName.endsWith('.xlsx') || fName.endsWith('.xls')) extension = 'xlsx';
+                        else extension = contentType.split('/')[1] || 'pdf'; // Fallback genérico
+                    }
 
                     const nombreArchivo = `crm_incoming/${email}/${identificador.replace(/[^a-zA-Z0-9]/g, '')}_${Date.now()}.${extension}`;
                     const { getStorage } = require('firebase-admin/storage');
