@@ -92,7 +92,13 @@ async function registrarContactoInteligente(email, jid, pushName, esGrupo, whats
             } catch (e) { }
         }
 
-        try { fotoUrl = await whatsappSockLocal.profilePictureUrl(jid, 'image'); } catch (e) { }
+        // ◄ FIX CRÍTICO: FALLBACK PARA FOTOS DE GRUPOS ►
+        try { 
+            fotoUrl = await whatsappSockLocal.profilePictureUrl(jid, 'image'); 
+        } catch (e) { 
+            // Si la imagen grande falla, pedimos la miniatura obligatoria
+            try { fotoUrl = await whatsappSockLocal.profilePictureUrl(jid, 'preview'); } catch (e2) { }
+        }
 
         await docRef.set({
             jid: jid,
@@ -1227,7 +1233,15 @@ app.get('/api/foto-perfil', async (req, res) => {
     
     try {
         await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 200) + 200));
-        const urlFoto = await whatsappSockLocal.profilePictureUrl(jid, 'image');
+        let urlFoto = null;
+        
+        // ◄ FIX CRÍTICO: INTENTO DE ALTA RESOLUCIÓN Y FALLBACK A PREVIEW ►
+        try {
+            urlFoto = await whatsappSockLocal.profilePictureUrl(jid, 'image');
+        } catch (err) {
+            urlFoto = await whatsappSockLocal.profilePictureUrl(jid, 'preview');
+        }
+        
         return res.json({ url: urlFoto });
     } catch (e) {
         return res.json({ url: null }); 
