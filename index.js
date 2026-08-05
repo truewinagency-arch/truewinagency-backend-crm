@@ -1596,7 +1596,8 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                                     channelId: 'crm_bot_alerts',
                                     sound: 'sonido_bot',
                                     icon: 'ic_notificacion_bot', 
-                                    color: '#F8A72B' 
+                                    color: '#F8A72B',
+                                    tag: numeroCliente // ◄ FIX: Separa las notificaciones por cliente
                                 }
                             }
                         };
