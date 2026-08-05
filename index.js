@@ -1582,7 +1582,7 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                         const emailLimpio = email.replace(/[^a-zA-Z0-9]/g, '');
                         const topicName = `crm_${emailLimpio}`;
                         
-                        const mensajePush = {
+                       const mensajePush = {
                             topic: topicName,
                             notification: {
                                 title: auto.palabraClave,          
@@ -1595,9 +1595,10 @@ async function procesarBotEnNube(email, numeroCliente, textoMensaje, whatsappSoc
                                 notification: {
                                     channelId: 'crm_bot_alerts',
                                     sound: 'sonido_bot',
-                                    icon: 'ic_notificacion_bot', 
-                                    color: '#F8A72B',
-                                    tag: numeroCliente // ◄ FIX: Separa las notificaciones por cliente
+                                    // ◄ FIX CRÍTICO: Eliminamos la línea 'icon' ►
+                                    // Firebase usará el logo oficial de la app por defecto, evitando el crash de Android.
+                                    color: '#F8A72B', 
+                                    tag: numeroCliente 
                                 }
                             }
                         };
