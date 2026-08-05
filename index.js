@@ -1256,11 +1256,15 @@ app.get('/api/foto-perfil', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 200) + 200));
         let urlFoto = null;
         
-        // ◄ FIX CRÍTICO: INTENTO DE ALTA RESOLUCIÓN Y FALLBACK A PREVIEW ►
         try {
             urlFoto = await whatsappSockLocal.profilePictureUrl(jid, 'image');
         } catch (err) {
             urlFoto = await whatsappSockLocal.profilePictureUrl(jid, 'preview');
+        }
+
+        // ◄ FIX CRÍTICO: ACTUALIZA EL ENLACE CADUCADO EN LA NUBE ►
+        if (urlFoto) {
+            getColeccionContactos(email).doc(jid).update({ fotoPerfil: urlFoto }).catch(() => {});
         }
         
         return res.json({ url: urlFoto });
